@@ -65,6 +65,11 @@ name = "recovery-workflow"
 binding = "RECOVERY_WF"
 class_name = "RecoveryWorkflow"
 
+[[workflows]]
+name = "certified-extraction-workflow"
+binding = "CERTIFIED_EXTRACTION_WF"
+class_name = "CertifiedExtractionWorkflow"
+
 # ============ Durable Objects ============
 [[durable_objects.bindings]]
 name = "SESSION"
