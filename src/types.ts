@@ -15,6 +15,7 @@ export interface Env {
   AGENT: DurableObjectNamespace;
   SIMULATION: DurableObjectNamespace;
   MISSION: DurableObjectNamespace;
+  SAFETY: DurableObjectNamespace;
   API_KEY?: string;
   PII_HMAC_SECRET?: string;
   CF_API_TOKEN?: string;
