@@ -12,10 +12,12 @@ import { Supervisor } from "./do/supervisor";
 import { AgentNode } from "./do/agent-node";
 import { SimulationTwin } from "./do/simulation";
 import { MissionBrain } from "./do/mission-brain";
+import { SafetyInterlock } from "./do/safety-interlock";
 import { RecoveryWorkflow } from "./workflows/recovery";
+import { CertifiedExtractionWorkflow } from "./workflows/certified-extraction";
 import { handleMcpRequest } from "./mcp/governance";
 
-export { SessionMemory, GraphResolver, Supervisor, AgentNode, SimulationTwin, MissionBrain, RecoveryWorkflow };
+export { SessionMemory, GraphResolver, Supervisor, AgentNode, SimulationTwin, MissionBrain, SafetyInterlock, RecoveryWorkflow, CertifiedExtractionWorkflow };
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -193,6 +195,79 @@ export default {
       if (!inst) return json({ error: "workflow not found" }, 404);
       await inst.sendEvent({ type: "recovery.approved", payload: { approved, operator: identity.actor } });
       return json({ sent: true });
+    }
+
+    // ===== Certified Extraction Engine (CEE) =====
+    if (u.pathname === "/extraction/certify" && req.method === "POST") {
+      const body = await req.json<any>();
+      if (!body.documentId || !body.schema) {
+        return json({ error: "documentId and schema required" }, 400);
+      }
+      const wf = await env.CERTIFIED_EXTRACTION_WF.create({
+        params: {
+          documentId: body.documentId,
+          tenant: identity.tenant,
+          actor: identity.actor,
+          rawText: body.text ?? body.rawText,
+          images: body.images,
+          schema: body.schema,
+          schema_version: body.schema_version ?? "v1",
+          thresholds: body.thresholds,
+        },
+      });
+      return json({ workflow_id: wf.id, status: "started" });
+    }
+    if (u.pathname.match(/^\/extraction\/workflow\/[^/]+\/review$/) && req.method === "POST") {
+      const wfId = u.pathname.split("/")[3];
+      const { corrections, reviewer } = await req.json<any>();
+      const inst = await env.CERTIFIED_EXTRACTION_WF.get(wfId);
+      if (!inst) return json({ error: "workflow not found" }, 404);
+      await inst.sendEvent({
+        type: "extraction.reviewed",
+        payload: { corrections: corrections ?? {}, reviewer: reviewer ?? identity.actor },
+      });
+      return json({ sent: true });
+    }
+    if (u.pathname === "/extraction/certificates" && req.method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT id, object_id, document_id, certified_count, total_count, actor, created_at
+         FROM extraction_certificates WHERE tenant = ? ORDER BY created_at DESC LIMIT 50`
+      ).bind(identity.tenant).all();
+      return json({ certificates: rows.results });
+    }
+
+    // ===== Safety Interlock =====
+    if (u.pathname === "/safety/evaluate" && req.method === "POST") {
+      const body = await req.json<any>();
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/evaluate", {
+        method: "POST",
+        body: JSON.stringify({ action: body.action, identity }),
+      })).json());
+    }
+    if (u.pathname === "/safety/pending" && req.method === "GET") {
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/pending")).json());
+    }
+    if (u.pathname === "/safety/decide" && req.method === "POST") {
+      const body = extawait req.json<any>();
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/decide", {
+        method: "POST",
+        body: JSON.stringify({ ...body, operator: identity.actor }),
+      })).json());
+    }
+    if (u.pathname === "/safety/sandbox/exec" && req.method === "POST") {
+      const body = await req.json<any>();
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/sandbox/exec", {
+        method: "POST",
+        body: JSON.stringify({ ...body, identity }),
+      })).json());
+    }
+    if (u.pathname === "/safety/log" && req.method === "GET") {
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/log")).json());
     }
 
     // ===== Audit =====
