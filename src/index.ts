@@ -13,6 +13,7 @@ import { AgentNode } from "./do/agent-node";
 import { SimulationTwin } from "./do/simulation";
 import { MissionBrain } from "./do/mission-brain";
 import { RecoveryWorkflow } from "./workflows/recovery";
+import { handleMcpRequest } from "./mcp/governance";
 
 export { SessionMemory, GraphResolver, Supervisor, AgentNode, SimulationTwin, MissionBrain, RecoveryWorkflow };
 
@@ -31,6 +32,11 @@ export default {
 
     const u = new URL(req.url);
     if (u.pathname === "/health") return json({ ok: true, ts: Date.now() });
+
+    // ===== MCP Governance Server (Océano Azul) =====
+    if (u.pathname === "/mcp" || u.pathname.startsWith("/mcp/")) {
+      return handleMcpRequest(req, env);
+    }
 
     const identity = await authenticate(req, env);
     if (!identity) return json({ error: "unauthorized" }, 401);
@@ -165,7 +171,6 @@ export default {
         created_at: Date.now(),
         created_by: identity.actor,
       };
-      // Dual dispatch: Queue (async) + Workflow (durable con aprobación)
       await env.MISSIONS.send(mission);
       const wf = await env.RECOVERY_WF.create({
         params: {
