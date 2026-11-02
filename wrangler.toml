@@ -90,12 +90,20 @@ class_name = "SimulationTwin"
 name = "MISSION"
 class_name = "MissionBrain"
 
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = [
   "SessionMemory", "GraphResolver", "Supervisor",
   "AgentNode", "SimulationTwin", "MissionBrain"
 ]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SafetyInterlock"]
 
 # ============ Cron ============
 [triggers]
