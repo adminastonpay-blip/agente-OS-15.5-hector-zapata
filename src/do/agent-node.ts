@@ -18,42 +18,132 @@ export class AgentNode {
       try {
         const calls = await this.planTools(role, goal, context, tools);
         const obs: string[] = [];
+        const blocked: any[] = [];
+
         for (const c of calls) {
-          try { obs.push(`[${c.tool}] ${await this.runTool(identity, c)}`); }
-          catch (e) { obs.push(`[${c.tool}] ERROR: ${(e as Error).message}`); }
+          // ── SafetyInterlock gate ──────────────────────────────
+          const gate = await this.safetyCheck(identity, c, { goal, role });
+          if (gate.status === "denied") {
+            obs.push(`[${c.tool}] DENIED by SafetyInterlock: ${(gate.policy?.reasons ?? []).join("; ")}`);
+            blocked.push({ tool: c.tool, status: "denied", policy: gate.policy });
+            continue;
+          }
+          if (gate.status === "pending_approval") {
+            obs.push(`[${c.tool}] PENDING APPROVAL (id=${gate.approval_id}): ${(gate.policy?.reasons ?? []).join("; ")}`);
+            blocked.push({
+              tool: c.tool,
+              status: "pending_approval",
+              approval_id: gate.approval_id,
+              policy: gate.policy,
+            });
+            continue;
+          }
+          // status === "allowed" → ejecutar
+          try {
+            obs.push(`[${c.tool}] ${await this.runTool(identity, c)}`);
+          } catch (e) {
+            obs.push(`[${c.tool}] ERROR: ${(e as Error).message}`);
+          }
         }
+
         const answer = await this.synthesize(identity, role, goal, context, obs);
-        return Response.json({ result: answer, attempts, status: "done" });
-      } catch (e) { lastErr = (e as Error).message; }
+
+        const status = blocked.some((b) => b.status === "pending_approval")
+          ? "partial_pending_approval"
+          : blocked.some((b) => b.status === "denied")
+            ? "partial_denied"
+            : "done";
+
+        return Response.json({
+          result: answer,
+          attempts,
+          status,
+          blocked: blocked.length ? blocked : undefined,
+        });
+      } catch (e) {
+        lastErr = (e as Error).message;
+      }
     }
     return Response.json({ result: `failed: ${lastErr}`, attempts, status: "failed" });
   }
 
+  /**
+   * Consulta al SafetyInterlock antes de ejecutar cualquier tool.
+   * Fail-closed: si el interlock no responde, deniega.
+   */
+  private async safetyCheck(
+    identity: any,
+    call: { tool: string; args: Record<string, unknown> },
+    ctx: { goal: string; role: string }
+  ) {
+    try {
+      const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity.tenant));
+      const res = await stub.fetch("https://do/evaluate", {
+        method: "POST",
+        body: JSON.stringify({
+          action: {
+            tool: call.tool,
+            args: call.args ?? {},
+            context: { objective: ctx.goal, role: ctx.role },
+          },
+          identity,
+        }),
+      });
+      return (await res.json()) as {
+        status: "allowed" | "denied" | "pending_approval";
+        approval_id?: string;
+        policy?: { reasons?: string[]; risk?: string; score?: number };
+      };
+    } catch {
+      return {
+        status: "denied" as const,
+        policy: { reasons: ["SafetyInterlock unavailable — fail-closed"] },
+      };
+    }
+  }
+
   private async planTools(role: string, goal: string, context: string, tools: string[]) {
     const r = await chat(this.env, [
-      { role: "system", content: `Agente "${role}". Tools disponibles: ${tools.join(",")}. Responde JSON: {"tools":[{"tool":"<n>","args":{}}]}` },
+      {
+        role: "system",
+        content: `Agente "${role}". Tools disponibles: ${tools.join(",")}. Responde JSON: {"tools":[{"tool":"<n>","args":{}}]}`,
+      },
       { role: "user", content: `Objetivo: ${goal}\nContexto:\n${context}` },
     ]);
-    try { return JSON.parse(r.response).tools ?? []; }
-    catch { return [{ tool: "reason", args: { prompt: goal } }]; }
+    try {
+      return JSON.parse(r.response).tools ?? [];
+    } catch {
+      return [{ tool: "reason", args: { prompt: goal } }];
+    }
   }
 
   private async runTool(identity: any, c: any): Promise<string> {
     if (c.tool === "search") {
       const [qvec] = await embed(this.env, [c.args.query]);
       const m = await this.env.VECTORIZE.query(qvec, { topK: 3, returnMetadata: "all" } as any);
-      return (m.matches ?? []).map((x: any) => `[${x.metadata?.source}] ${x.metadata?.chunk}`).join("\n");
+      return (m.matches ?? [])
+        .map((x: any) => `[${x.metadata?.source}] ${x.metadata?.chunk}`)
+        .join("\n");
     }
     if (c.tool === "graph_query") {
       const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(identity.tenant));
       if (c.args.type === "neighbors")
-        return JSON.stringify(await (await stub.fetch(`https://do/neighbors?id=${c.args.id}`)).json());
-      return JSON.stringify(await (await stub.fetch(`https://do/path?from=${c.args.id}&to=${c.args.to}`)).json());
+        return JSON.stringify(
+          await (await stub.fetch(`https://do/neighbors?id=${c.args.id}`)).json()
+        );
+      return JSON.stringify(
+        await (
+          await stub.fetch(`https://do/path?from=${c.args.id}&to=${c.args.to}`)
+        ).json()
+      );
     }
     if (c.tool === "write") {
       if (!identity.roles.includes("executor")) throw new Error("role not allowed to write");
       if (c.args.op === "create_object")
-        return `created ${await createObject(this.env, identity, { type_id: c.args.type_id, properties: c.args.properties })}`;
+        return `created ${await createObject(this.env, identity, {
+          type_id: c.args.type_id,
+          properties: c.args.properties,
+        })}`;
       throw new Error("unsupported op");
     }
     const r = await chat(this.env, [
@@ -63,12 +153,25 @@ export class AgentNode {
     return r.response;
   }
 
-  private async synthesize(identity: any, role: string, goal: string, context: string, obs: string[]) {
+  private async synthesize(
+    identity: any,
+    role: string,
+    goal: string,
+    context: string,
+    obs: string[]
+  ) {
     const r = await chat(this.env, [
       { role: "system", content: `Agente "${role}". Sintetiza veraz y conciso.` },
-      { role: "user", content: `Objetivo: ${goal}\nContexto:\n${context}\nObservaciones:\n${obs.join("\n")}` },
+      {
+        role: "user",
+        content: `Objetivo: ${goal}\nContexto:\n${context}\nObservaciones:\n${obs.join("\n")}`,
+      },
     ]);
-    const { masked, vault } = await maskForAgent(r.response, identity.clearance, this.env.PII_HMAC_SECRET!);
+    const { masked, vault } = await maskForAgent(
+      r.response,
+      identity.clearance,
+      this.env.PII_HMAC_SECRET!
+    );
     return restoreFromVault(masked, vault);
   }
 }
