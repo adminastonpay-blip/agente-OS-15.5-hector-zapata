@@ -1,0 +1,111 @@
+name = "agente-os-15.5-hector-zapata"
+main = "src/index.ts"
+compatibility_date = "2026-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ============ IA ============
+[ai]
+binding = "AI"
+
+# ============ Vectorize ============
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "knowledge-base"
+
+# ============ D1 (metadata caliente) ============
+[[d1_databases]]
+binding = "DB"
+database_name = "sos-db"
+database_id = "REEMPLAZA"
+
+# ============ Hyperdrive (grafo frío / bitemporal) ============
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REEMPLAZA-HYPERDRIVE-ID"
+
+# ============ R2 (journal inmutable) ============
+[[r2_buckets]]
+binding = "JOURNAL"
+bucket_name = "sos-journal"
+
+# ============ Queues ============
+[[queues.producers]]
+binding = "ETL_QUEUE"
+queue = "etl-pipeline"
+
+[[queues.producers]]
+binding = "MISSIONS"
+queue = "recovery.missions"
+
+[[queues.consumers]]
+queue = "etl-pipeline"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "etl-dlq"
+
+[[queues.consumers]]
+queue = "recovery.missions"
+max_batch_size = 5
+max_batch_timeout = 3
+max_retries = 3
+dead_letter_queue = "recovery-dlq"
+
+[[queues.producers]]
+binding = "ETL_DLQ"
+queue = "etl-dlq"
+
+[[queues.producers]]
+binding = "MISSIONS_DLQ"
+queue = "recovery-dlq"
+
+# ============ Workflows ============
+[[workflows]]
+name = "recovery-workflow"
+binding = "RECOVERY_WF"
+class_name = "RecoveryWorkflow"
+
+# ============ Durable Objects ============
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionMemory"
+
+[[durable_objects.bindings]]
+name = "GRAPH"
+class_name = "GraphResolver"
+
+[[durable_objects.bindings]]
+name = "SUPERVISOR"
+class_name = "Supervisor"
+
+[[durable_objects.bindings]]
+name = "AGENT"
+class_name = "AgentNode"
+
+[[durable_objects.bindings]]
+name = "SIMULATION"
+class_name = "SimulationTwin"
+
+[[durable_objects.bindings]]
+name = "MISSION"
+class_name = "MissionBrain"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [
+  "SessionMemory", "GraphResolver", "Supervisor",
+  "AgentNode", "SimulationTwin", "MissionBrain"
+]
+
+# ============ Cron ============
+[triggers]
+crons = ["*/15 * * * *"]
+
+# ============ Variables ============
+[vars]
+AI_GATEWAY_ID = "sovereign-gateway"
+CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+EMBED_MODEL = "@cf/baai/bge-m3"
+ACCESS_TEAM_DOMAIN = "mi-equipo"
+ACCESS_AUD = "REEMPLAZA-AUD"
+CF_ACCOUNT_ID = "REEMPLAZA"
