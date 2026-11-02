@@ -9,6 +9,7 @@ export interface Env {
   ETL_DLQ: Queue<any>;
   MISSIONS_DLQ: Queue<Mission>;
   RECOVERY_WF: Workflow;
+  CERTIFIED_EXTRACTION_WF: Workflow;
   SESSION: DurableObjectNamespace;
   GRAPH: DurableObjectNamespace;
   SUPERVISOR: DurableObjectNamespace;
