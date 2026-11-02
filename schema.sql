@@ -52,3 +52,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,
   action TEXT NOT NULL, actor TEXT NOT NULL, detail TEXT
 );
+
+-- Certified Extraction Engine
+CREATE TABLE IF NOT EXISTS extraction_certificates (
+  id TEXT PRIMARY KEY,
+  object_id TEXT NOT NULL,
+  tenant TEXT NOT NULL,
+  document_id TEXT,
+  model TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  certified_count INTEGER DEFAULT 0,
+  total_count INTEGER DEFAULT 0,
+  actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ext_cert_tenant ON extraction_certificates(tenant, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ext_cert_hash ON extraction_certificates(input_hash);
