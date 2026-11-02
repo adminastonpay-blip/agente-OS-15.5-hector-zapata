@@ -13,11 +13,14 @@
 - **PII masking** con HMAC + clearance ABAC
 - **Criptografía post-cuántica** (ML-DSA / ML-KEM)
 - **Journal inmutable** en R2
+- **MCP Governance Server** (Océano Azul) — Árbitro neutral multi-vendor
 
 ## Estructura
 
 ```
 agente-os-15.5/
+├── package.json
+├── tsconfig.json
 ├── wrangler.toml
 ├── schema.sql
 ├── src/
@@ -30,6 +33,8 @@ agente-os-15.5/
 │   ├── types.ts
 │   ├── crypto/pq.ts
 │   ├── lib/ai.ts
+│   ├── mcp/
+│   │   └── governance.ts      ← NUEVO: MCP Governance Server
 │   ├── do/
 │   │   ├── session.ts
 │   │   ├── graph-do.ts
@@ -86,7 +91,38 @@ wrangler deploy
 | `GET /mission/:id` | Journal de misión |
 | `POST /workflow/:id/approve` | Human-in-the-loop |
 | `GET /audit` | Auditoría |
+| **`GET/POST /mcp`** | **MCP Governance Server (Océano Azul)** |
+
+## MCP Governance Server
+
+Endpoint: `https://<tu-worker>.workers.dev/mcp`
+
+Expone las capacidades soberanas de Aston OS como **tools MCP** para que cualquier cliente (Claude, Cursor, Windsurf, agentes de terceros) pueda usar el sistema como **árbitro neutral de gobernanza**.
+
+### Tools disponibles
+
+| Tool | Descripción | Clearance / Role |
+|------|-------------|------------------|
+| `cascade_impact` | Impacto en cascada bitemporal | Cualquiera autenticado |
+| `get_lineage` | Árbol de provenance | Cualquiera autenticado |
+| `find_objects` | Búsqueda por propiedad | Cualquiera autenticado |
+| `create_object` | Crear objeto en ontología | executor/admin + confidential+ |
+| `create_link` | Crear relación | executor/admin |
+| `run_simulation` | Iniciar Decision Twin | Cualquiera autenticado |
+| `apply_simulation_delta` | Aplicar cambio en simulación | Cualquiera autenticado |
+| `evaluate_simulation` | Evaluar impacto/riesgo | Cualquiera autenticado |
+| `audit_log` | Últimas entradas de auditoría | Cualquiera autenticado |
+| `swarm_plan` | Planificar y ejecutar enjambre | Cualquiera autenticado |
+
+Todas las llamadas generan **lineage automático**.
+
+### Ejemplo de conexión (Claude / Cursor)
+
+```
+MCP Server URL: https://agente-os-15.5.<account>.workers.dev/mcp
+Authorization: Bearer <API_KEY>
+```
 
 ---
 
-**Agente OS 15.5** · Hector Zapata · 2026
+**Agente OS 15.5** · Hector Zapata · 2026 · MCP Governance Server
