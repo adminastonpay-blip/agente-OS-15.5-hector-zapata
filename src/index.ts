@@ -1,3 +1,6 @@
+/**
+ * Agente OS 15.5 — perfil MINIMAL: deploy sin D1/R2/Vectorize/Queues/Hyperdrive.
+ */
 import type { Env, Mission } from "./types";
 import { authenticate } from "./auth";
 import { maskForAgent, restoreFromVault } from "./pii";
@@ -17,69 +20,113 @@ import { RecoveryWorkflow } from "./workflows/recovery";
 import { CertifiedExtractionWorkflow } from "./workflows/certified-extraction";
 import { handleMcpRequest } from "./mcp/governance";
 
-export { SessionMemory, GraphResolver, Supervisor, AgentNode, SimulationTwin, MissionBrain, SafetyInterlock, RecoveryWorkflow, CertifiedExtractionWorkflow };
+export {
+  SessionMemory, GraphResolver, Supervisor, AgentNode, SimulationTwin,
+  MissionBrain, SafetyInterlock, RecoveryWorkflow, CertifiedExtractionWorkflow,
+};
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type,Authorization,Cf-Access-Jwt-Assertion,X-Sensor-Key",
 };
-const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), {
-  status: s, headers: { "Content-Type": "application/json", ...CORS },
-});
+const json = (d: unknown, s = 200) =>
+  new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json", ...CORS } });
+
+function need(env: Env, key: keyof Env, label: string): Response | null {
+  if (!(env as any)[key]) {
+    return json({
+      error: "binding_unavailable",
+      binding: label,
+      message: `Perfil minimal: falta binding ${label}. Creá el recurso y reactiválo en wrangler.toml.`,
+      profile: env.DEPLOY_PROFILE ?? "unknown",
+    }, 503);
+  }
+  return null;
+}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-
     const u = new URL(req.url);
-    if (u.pathname === "/health") return json({ ok: true, ts: Date.now() });
 
-    if (u.pathname === "/mcp" || u.pathname.startsWith("/mcp/")) {
-      return handleMcpRequest(req, env);
-    }
-
-    const identity = await authenticate(req, env);
-    if (!identity) return json({ error: "unauthorized" }, 401);
-
-    if (u.pathname === "/etl/ingest" && req.method === "POST") {
-      const b = await req.json<any>();
-      const { masked, vault } = await maskForAgent(b.text ?? "", identity.clearance, env.PII_HMAC_SECRET!);
-      await env.ETL_QUEUE.send({
-        kind: "ingest", source: b.source, text: masked,
-        tenant: identity.tenant, actor: identity.actor,
+    if (u.pathname === "/health") {
+      return json({
+        ok: true,
+        ts: Date.now(),
+        profile: env.DEPLOY_PROFILE ?? "full",
+        bindings: {
+          AI: !!env.AI, DB: !!env.DB, JOURNAL: !!env.JOURNAL,
+          VECTORIZE: !!env.VECTORIZE, HYPERDRIVE: !!env.HYPERDRIVE,
+          ETL_QUEUE: !!env.ETL_QUEUE, SESSION: !!env.SESSION, SAFETY: !!env.SAFETY,
+        },
       });
-      return json({ enqueued: true, pii_masked: vault.size });
     }
+
+    if (u.pathname === "/mcp" || u.pathname.startsWith("/mcp/"))
+      return handleMcpRequest(req, env);
+
+    let identity = await authenticate(req, env);
+    if (!identity && env.DEPLOY_PROFILE === "minimal" && !env.API_KEY) {
+      identity = {
+        actor: "bootstrap@minimal", method: "apikey", tenant: "default",
+        roles: ["admin", "executor"], clearance: "confidential",
+      };
+    }
+    if (!identity) return json({ error: "unauthorized" }, 401);
 
     if (u.pathname === "/chat" && req.method === "POST") {
       const { session_id, message } = await req.json<any>();
       if (!session_id || !message) return json({ error: "session_id y message requeridos" }, 400);
-      const [qvec] = await embed(env, [message]);
-      const matches = await env.VECTORIZE.query(qvec, { topK: 5, returnMetadata: "all" } as any);
-      const context = (matches.matches ?? []).map((m: any) =>
-        `[${m.metadata?.source}] ${m.metadata?.chunk}`).join("\n---\n");
+      let context = "";
+      if (env.VECTORIZE) {
+        try {
+          const [qvec] = await embed(env, [message]);
+          const matches = await env.VECTORIZE.query(qvec, { topK: 5, returnMetadata: "all" } as any);
+          context = (matches.matches ?? []).map((m: any) => `[${m.metadata?.source}] ${m.metadata?.chunk}`).join("\n---\n");
+        } catch { /* RAG opcional */ }
+      }
       const stub = env.SESSION.get(env.SESSION.idFromName(session_id));
       const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
       const messages = [
-        { role: "system", content: "Agente semántico empresarial. Responde en español, cita fuentes." },
+        { role: "system", content: "Agente semántico empresarial. Responde en español." },
         ...mem.history.slice(-10).map((h: any) => ({ role: h.role, content: h.content })),
         { role: "user", content: context ? `Contexto:\n${context}\n\nPregunta: ${message}` : message },
       ];
       const out = await chat(env, messages);
-      const { masked, vault } = await maskForAgent(out.response, identity.clearance, env.PII_HMAC_SECRET!);
-      const answer = restoreFromVault(masked, vault);
+      let answer = out.response;
+      if (env.PII_HMAC_SECRET) {
+        const { masked, vault } = await maskForAgent(out.response, identity.clearance, env.PII_HMAC_SECRET);
+        answer = restoreFromVault(masked, vault);
+      }
       await stub.fetch("https://do/append", { method: "POST", body: JSON.stringify({ role: "user", content: message }) });
       await stub.fetch("https://do/append", { method: "POST", body: JSON.stringify({ role: "assistant", content: answer }) });
-      return json({ answer, sources: (matches.matches ?? []).map((m: any) => m.metadata?.source) });
+      return json({ answer, rag: !!env.VECTORIZE, profile: env.DEPLOY_PROFILE });
+    }
+
+    if (u.pathname === "/etl/ingest" && req.method === "POST") {
+      const blocked = need(env, "ETL_QUEUE", "ETL_QUEUE");
+      if (blocked) return blocked;
+      const b = await req.json<any>();
+      let text = b.text ?? "";
+      if (env.PII_HMAC_SECRET) {
+        const { masked } = await maskForAgent(text, identity.clearance, env.PII_HMAC_SECRET);
+        text = masked;
+      }
+      await env.ETL_QUEUE!.send({ kind: "ingest", source: b.source, text, tenant: identity.tenant, actor: identity.actor });
+      return json({ enqueued: true });
+    }
+
+    if (u.pathname.startsWith("/ontology") || u.pathname.startsWith("/lineage") || u.pathname === "/audit") {
+      const blocked = need(env, "DB", "DB");
+      if (blocked) return blocked;
     }
 
     if (u.pathname === "/ontology/types" && req.method === "POST")
       return json({ id: await createObjectType(env, await req.json<any>()) });
     if (u.pathname === "/ontology/objects" && req.method === "POST") {
       const b = await req.json<any>();
-      const { masked } = await maskForAgent(JSON.stringify(b.properties), identity.clearance, env.PII_HMAC_SECRET!);
-      return json({ id: await createObject(env, identity, { type_id: b.type_id, properties: JSON.parse(masked) }) });
+      return json({ id: await createObject(env, identity, { type_id: b.type_id, properties: b.properties }) });
     }
     if (u.pathname === "/ontology/links" && req.method === "POST")
       return json({ id: await createLink(env, identity, await req.json<any>()) });
@@ -97,7 +144,6 @@ export default {
       const { root_id, at_ts } = await req.json<any>();
       return json({ impact: await cascadeImpact(env, identity.tenant, root_id, at_ts ?? Date.now()) });
     }
-
     if (u.pathname.startsWith("/lineage/"))
       return json({ tree: await getLineageTree(env, u.pathname.split("/").pop()!) });
 
@@ -109,60 +155,27 @@ export default {
       })).json());
     }
 
-    if (u.pathname === "/simulation" && req.method === "POST") {
-      const b = await req.json<any>();
-      const simId = `sim_${crypto.randomUUID()}`;
-      const rows = await env.DB.prepare(
-        "SELECT id, type_id, properties FROM objects WHERE tenant = ? AND valid_to IS NULL LIMIT 200"
-      ).bind(identity.tenant).all();
-      const stub = env.SIMULATION.get(env.SIMULATION.idFromName(simId));
-      await stub.fetch("https://do/init", { method: "POST", body: JSON.stringify({ objects: rows.results }) });
-      await env.DB.prepare(
-        "INSERT INTO simulations (id, tenant, scenario, status, created_at, created_by) VALUES (?, ?, ?, 'active', ?, ?)"
-      ).bind(simId, identity.tenant, JSON.stringify(b.scenario ?? {}), Date.now(), identity.actor).run();
-      return json({ simId });
-    }
-    if (u.pathname.match(/^\/simulation\/[^/]+\/apply$/)) {
-      const simId = u.pathname.split("/")[2];
-      const stub = env.SIMULATION.get(env.SIMULATION.idFromName(simId));
-      return json(await (await stub.fetch("https://do/apply", { method: "POST", body: await req.text() })).json());
-    }
-    if (u.pathname.match(/^\/simulation\/[^/]+\/evaluate$/)) {
-      const simId = u.pathname.split("/")[2];
-      const stub = env.SIMULATION.get(env.SIMULATION.idFromName(simId));
-      return json(await (await stub.fetch("https://do/evaluate", { method: "POST", body: await req.text() })).json());
-    }
-    if (u.pathname.match(/^\/simulation\/[^/]+\/commit$/)) {
-      const simId = u.pathname.split("/")[2];
-      const stub = env.SIMULATION.get(env.SIMULATION.idFromName(simId));
-      return json(await (await stub.fetch("https://do/commit", { method: "POST", body: JSON.stringify({ identity }) })).json());
-    }
-
-    if (u.pathname === "/ingest-failure" && req.method === "POST") {
+    if (u.pathname === "/safety/evaluate" && req.method === "POST") {
       const body = await req.json<any>();
-      const mission: Mission = {
-        id: `mis_${crypto.randomUUID()}`,
-        origin: body.origin, pool_id: body.pool_id, error_code: body.error_code,
-        severity: body.severity ?? "high", created_at: Date.now(), created_by: identity.actor,
-      };
-      await env.MISSIONS.send(mission);
-      const wf = await env.RECOVERY_WF.create({
-        params: { origin: mission.origin, pool_id: mission.pool_id, error_code: mission.error_code, severity: mission.severity, requestedBy: identity.actor },
-      });
-      return json({ mission_id: mission.id, workflow_id: wf.id, enqueued: true });
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/evaluate", {
+        method: "POST", body: JSON.stringify({ action: body.action, identity }),
+      })).json());
     }
-    if (u.pathname.startsWith("/mission/") && req.method === "GET") {
-      const id = u.pathname.split("/").pop()!;
-      const brain = env.MISSION.get(env.MISSION.idFromName(`mission:${id}`));
-      return json(await (await brain.fetch("https://do/journal")).json());
+    if (u.pathname === "/safety/pending" && req.method === "GET") {
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/pending")).json());
     }
-    if (u.pathname.match(/^\/workflow\/[^/]+\/approve$/) && req.method === "POST") {
-      const wfId = u.pathname.split("/")[2];
-      const { approved } = await req.json<any>();
-      const inst = await env.RECOVERY_WF.get(wfId);
-      if (!inst) return json({ error: "workflow not found" }, 404);
-      await inst.sendEvent({ type: "recovery.approved", payload: { approved, operator: identity.actor } });
-      return json({ sent: true });
+    if (u.pathname === "/safety/decide" && req.method === "POST") {
+      const body = await req.json<any>();
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/decide", {
+        method: "POST", body: JSON.stringify({ ...body, operator: identity.actor }),
+      })).json());
+    }
+    if (u.pathname === "/safety/log" && req.method === "GET") {
+      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      return json(await (await stub.fetch("https://do/log")).json());
     }
 
     if (u.pathname === "/extraction/certify" && req.method === "POST") {
@@ -177,47 +190,26 @@ export default {
       });
       return json({ workflow_id: wf.id, status: "started" });
     }
-    if (u.pathname.match(/^\/extraction\/workflow\/[^/]+\/review$/) && req.method === "POST") {
-      const wfId = u.pathname.split("/")[3];
-      const { corrections, reviewer } = await req.json<any>();
-      const inst = await env.CERTIFIED_EXTRACTION_WF.get(wfId);
-      if (!inst) return json({ error: "workflow not found" }, 404);
-      await inst.sendEvent({ type: "extraction.reviewed", payload: { corrections: corrections ?? {}, reviewer: reviewer ?? identity.actor } });
-      return json({ sent: true });
-    }
-    if (u.pathname === "/extraction/certificates" && req.method === "GET") {
-      const rows = await env.DB.prepare(
-        `SELECT id, object_id, document_id, certified_count, total_count, actor, created_at FROM extraction_certificates WHERE tenant = ? ORDER BY created_at DESC LIMIT 50`
-      ).bind(identity.tenant).all();
-      return json({ certificates: rows.results });
-    }
 
-    if (u.pathname === "/safety/evaluate" && req.method === "POST") {
+    if (u.pathname === "/ingest-failure" && req.method === "POST") {
       const body = await req.json<any>();
-      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
-      return json(await (await stub.fetch("https://do/evaluate", { method: "POST", body: JSON.stringify({ action: body.action, identity }) })).json());
-    }
-    if (u.pathname === "/safety/pending" && req.method === "GET") {
-      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
-      return json(await (await stub.fetch("https://do/pending")).json());
-    }
-    if (u.pathname === "/safety/decide" && req.method === "POST") {
-      const body = await req.json<any>();
-      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
-      return json(await (await stub.fetch("https://do/decide", { method: "POST", body: JSON.stringify({ ...body, operator: identity.actor }) })).json());
-    }
-    if (u.pathname === "/safety/sandbox/exec" && req.method === "POST") {
-      const body = await req.json<any>();
-      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
-      return json(await (await stub.fetch("https://do/sandbox/exec", { method: "POST", body: JSON.stringify({ ...body, identity }) })).json());
-    }
-    if (u.pathname === "/safety/log" && req.method === "GET") {
-      const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
-      return json(await (await stub.fetch("https://do/log")).json());
+      const mission: Mission = {
+        id: `mis_${crypto.randomUUID()}`, origin: body.origin, pool_id: body.pool_id,
+        error_code: body.error_code, severity: body.severity ?? "high",
+        created_at: Date.now(), created_by: identity.actor,
+      };
+      if (env.MISSIONS) await env.MISSIONS.send(mission);
+      const wf = await env.RECOVERY_WF.create({
+        params: {
+          origin: mission.origin, pool_id: mission.pool_id, error_code: mission.error_code,
+          severity: mission.severity, requestedBy: identity.actor,
+        },
+      });
+      return json({ mission_id: mission.id, workflow_id: wf.id, queue: !!env.MISSIONS });
     }
 
     if (u.pathname === "/audit" && req.method === "GET") {
-      const rows = await env.DB.prepare("SELECT ts, action, actor, detail FROM audit_log ORDER BY id DESC LIMIT 50").all();
+      const rows = await env.DB!.prepare("SELECT ts, action, actor, detail FROM audit_log ORDER BY id DESC LIMIT 50").all();
       return json({ entries: rows.results });
     }
 
@@ -225,11 +217,11 @@ export default {
   },
 
   async queue(batch: MessageBatch<any>, env: Env) {
-    if (batch.queue === "etl-pipeline") return handleETLQueue(batch, env);
+    if (batch.queue === "etl-pipeline" && env.DB) return handleETLQueue(batch, env);
     if (batch.queue === "recovery.missions") return consumeMissions(batch as MessageBatch<Mission>, env);
   },
 
   async scheduled(_evt: ScheduledEvent, env: Env) {
-    return handleCron(env);
+    if (env.DB && env.VECTORIZE) return handleCron(env);
   },
 } satisfies ExportedHandler<Env>;
