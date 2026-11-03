@@ -1,10 +1,11 @@
-# Agente OS 15.5 — perfil MÍNIMO para que el deploy pase.
-# Luego se reactivan D1, R2, Vectorize, Queues, Hyperdrive uno a uno.
+# Deploy mínimo garantizado — Aston OS 15.5
+# El name DEBE coincidir EXACTO con el Worker en el dashboard Cloudflare.
 name = "agente-os-15-5-hector-zapata"
 main = "src/index.ts"
-compatibility_date = "2026-11-02"
+compatibility_date = "2026-11-03"
 compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
+workers_dev = true
 
 [ai]
 binding = "AI"
@@ -39,27 +40,11 @@ class_name = "SafetyInterlock"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = [
-  "SessionMemory", "GraphResolver", "Supervisor",
-  "AgentNode", "SimulationTwin", "MissionBrain"
-]
+new_sqlite_classes = ["SessionMemory", "GraphResolver", "Supervisor", "AgentNode", "SimulationTwin", "MissionBrain"]
 
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["SafetyInterlock"]
-
-[[workflows]]
-name = "recovery-workflow"
-binding = "RECOVERY_WF"
-class_name = "RecoveryWorkflow"
-
-[[workflows]]
-name = "certified-extraction-workflow"
-binding = "CERTIFIED_EXTRACTION_WF"
-class_name = "CertifiedExtractionWorkflow"
-
-[triggers]
-crons = ["*/15 * * * *"]
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
