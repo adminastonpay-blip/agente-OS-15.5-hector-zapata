@@ -1,6 +1,6 @@
 # Agente OS 15.5 — perfil MÍNIMO para que el deploy pase.
 # Luego se reactivan D1, R2, Vectorize, Queues, Hyperdrive uno a uno.
-name = "agente-os-15.5-hector-zapata"
+name = "agente-os-15-5-hector-zapata"
 main = "src/index.ts"
 compatibility_date = "2026-11-02"
 compatibility_flags = ["nodejs_compat"]
