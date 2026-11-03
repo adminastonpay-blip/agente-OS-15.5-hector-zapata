@@ -5,11 +5,11 @@ export interface Env {
   HYPERDRIVE?: Hyperdrive;
   JOURNAL?: R2Bucket;
   ETL_QUEUE?: Queue<any>;
-  MISSIONS?: Queue<Mission>;
+  MISSIONS?: Queue<any>;
   ETL_DLQ?: Queue<any>;
-  MISSIONS_DLQ?: Queue<Mission>;
-  RECOVERY_WF: Workflow;
-  CERTIFIED_EXTRACTION_WF: Workflow;
+  MISSIONS_DLQ?: Queue<any>;
+  RECOVERY_WF?: Workflow;
+  CERTIFIED_EXTRACTION_WF?: Workflow;
   SESSION: DurableObjectNamespace;
   GRAPH: DurableObjectNamespace;
   SUPERVISOR: DurableObjectNamespace;
