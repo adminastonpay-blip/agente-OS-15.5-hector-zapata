@@ -1,5 +1,3 @@
-# Deploy mínimo garantizado — Aston OS 15.5
-# El name DEBE coincidir EXACTO con el Worker en el dashboard Cloudflare.
 name = "agente-os-15-5-hector-zapata"
 main = "src/index.ts"
 compatibility_date = "2026-11-03"
@@ -14,43 +12,12 @@ binding = "AI"
 name = "SESSION"
 class_name = "SessionMemory"
 
-[[durable_objects.bindings]]
-name = "GRAPH"
-class_name = "GraphResolver"
-
-[[durable_objects.bindings]]
-name = "SUPERVISOR"
-class_name = "Supervisor"
-
-[[durable_objects.bindings]]
-name = "AGENT"
-class_name = "AgentNode"
-
-[[durable_objects.bindings]]
-name = "SIMULATION"
-class_name = "SimulationTwin"
-
-[[durable_objects.bindings]]
-name = "MISSION"
-class_name = "MissionBrain"
-
-[[durable_objects.bindings]]
-name = "SAFETY"
-class_name = "SafetyInterlock"
-
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["SessionMemory", "GraphResolver", "Supervisor", "AgentNode", "SimulationTwin", "MissionBrain"]
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["SafetyInterlock"]
+new_sqlite_classes = ["SessionMemory"]
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
 EMBED_MODEL = "@cf/baai/bge-m3"
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""
-CF_ACCOUNT_ID = ""
 DEPLOY_PROFILE = "minimal"
