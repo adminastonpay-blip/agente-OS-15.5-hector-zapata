@@ -1,13 +1,13 @@
 export interface Env {
   AI: Ai;
-  VECTORIZE: VectorizeIndex;
-  DB: D1Database;
-  HYPERDRIVE: Hyperdrive;
-  JOURNAL: R2Bucket;
-  ETL_QUEUE: Queue<any>;
-  MISSIONS: Queue<Mission>;
-  ETL_DLQ: Queue<any>;
-  MISSIONS_DLQ: Queue<Mission>;
+  VECTORIZE?: VectorizeIndex;
+  DB?: D1Database;
+  HYPERDRIVE?: Hyperdrive;
+  JOURNAL?: R2Bucket;
+  ETL_QUEUE?: Queue<any>;
+  MISSIONS?: Queue<Mission>;
+  ETL_DLQ?: Queue<any>;
+  MISSIONS_DLQ?: Queue<Mission>;
   RECOVERY_WF: Workflow;
   CERTIFIED_EXTRACTION_WF: Workflow;
   SESSION: DurableObjectNamespace;
@@ -26,6 +26,7 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   CF_ACCOUNT_ID: string;
+  DEPLOY_PROFILE?: string;
 }
 
 export interface Identity {
