@@ -46,7 +46,6 @@ export async function chat(
       temperature: opts?.temp ?? 0.2,
     } as any;
 
-    // 1) try with gateway if configured
     if (env.AI_GATEWAY_ID) {
       try {
         const out = (await env.AI.run(model as any, input, {
@@ -59,7 +58,6 @@ export async function chat(
       }
     }
 
-    // 2) direct Workers AI (no gateway)
     try {
       const out = (await env.AI.run(model as any, input)) as any;
       const text = extractText(out);
@@ -70,6 +68,66 @@ export async function chat(
   }
 
   throw new Error(lastErr || "AI unavailable");
+}
+
+/**
+ * Prefer native Workers AI stream; fall back to progressive SSE of full answer.
+ */
+export async function chatStream(
+  env: Env,
+  messages: any[],
+  opts?: { max_tokens?: number; temp?: number }
+): Promise<{ stream: ReadableStream; model: string; mode: "native" | "chunked" }> {
+  const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
+  const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
+  const inputBase = {
+    messages,
+    max_tokens: opts?.max_tokens ?? 512,
+    temperature: opts?.temp ?? 0.2,
+    stream: true,
+  } as any;
+
+  for (const model of models) {
+    try {
+      let out: any;
+      if (env.AI_GATEWAY_ID) {
+        try {
+          out = await env.AI.run(model as any, inputBase, {
+            gateway: { id: env.AI_GATEWAY_ID },
+          } as any);
+        } catch {
+          out = await env.AI.run(model as any, inputBase);
+        }
+      } else {
+        out = await env.AI.run(model as any, inputBase);
+      }
+
+      if (out && typeof out.getReader === "function") {
+        return { stream: out as ReadableStream, model, mode: "native" };
+      }
+      if (out?.body && typeof out.body.getReader === "function") {
+        return { stream: out.body as ReadableStream, model, mode: "native" };
+      }
+    } catch {
+      /* try next model or fallback */
+    }
+  }
+
+  // Fallback: full completion, then emit as SSE-friendly text chunks
+  const full = await chat(env, messages, opts);
+  const text = full.response || "";
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const size = 24;
+      for (let i = 0; i < text.length; i += size) {
+        controller.enqueue(encoder.encode(text.slice(i, i + size)));
+        await new Promise((r) => setTimeout(r, 12));
+      }
+      controller.close();
+    },
+  });
+  return { stream, model: full.model, mode: "chunked" };
 }
 
 export function chunk(text: string, size = 800, overlap = 100): string[] {

@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { chat } from "./lib/ai";
+import { chat, chatStream } from "./lib/ai";
 import { SessionMemory } from "./do/session";
 import { GraphResolver } from "./do/graph-do";
 import { Supervisor } from "./do/supervisor";
@@ -27,7 +27,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.0.0-edge";
+const VERSION = "21.0.1-stream";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -48,6 +48,41 @@ const SYSTEM_SOLVE =
   SYSTEM_CHAT +
   "\nPara problemas complejos: 1) reformulá el objetivo en una línea 2) listá 2-5 pasos 3) indicá la próxima acción 4) mencioná datos que falten.";
 
+async function loadHistory(env: Env, session_id: string, body: any) {
+  const stub = env.SESSION.get(env.SESSION.idFromName(session_id));
+  let history: any[] = [];
+  try {
+    const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
+    history = mem.history ?? [];
+  } catch {
+    history = [];
+  }
+  if (!history.length && Array.isArray(body.history)) {
+    history = body.history
+      .filter(
+        (h: any) =>
+          h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string"
+      )
+      .slice(-8);
+  }
+  return { stub, history };
+}
+
+async function appendHistory(stub: DurableObjectStub, message: string, answer: string) {
+  try {
+    await stub.fetch("https://do/append", {
+      method: "POST",
+      body: JSON.stringify({ role: "user", content: message }),
+    });
+    await stub.fetch("https://do/append", {
+      method: "POST",
+      body: JSON.stringify({ role: "assistant", content: answer }),
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
     const body = await req.json<any>().catch(() => ({}));
@@ -65,24 +100,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
         : "default";
 
     const useDeep = deep || body.mode === "deep" || body.deep === true;
-
-    const stub = env.SESSION.get(env.SESSION.idFromName(session_id));
-    let history: any[] = [];
-    try {
-      const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
-      history = mem.history ?? [];
-    } catch {
-      history = [];
-    }
-
-    if (!history.length && Array.isArray(body.history)) {
-      history = body.history
-        .filter(
-          (h: any) =>
-            h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string"
-        )
-        .slice(-8);
-    }
+    const { stub, history } = await loadHistory(env, session_id, body);
 
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
@@ -92,19 +110,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
 
     const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
     const answer = out.response || "";
-
-    try {
-      await stub.fetch("https://do/append", {
-        method: "POST",
-        body: JSON.stringify({ role: "user", content: message }),
-      });
-      await stub.fetch("https://do/append", {
-        method: "POST",
-        body: JSON.stringify({ role: "assistant", content: answer }),
-      });
-    } catch {
-      /* ignore */
-    }
+    await appendHistory(stub, message, answer);
 
     const actions =
       body.agent?.actions_enabled || body.client?.agent_runtime ? inferActions(message) : [];
@@ -133,6 +139,117 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
       502
     );
   }
+}
+
+/** SSE stream — does not replace /v1/chat */
+async function handleChatStream(req: Request, env: Env): Promise<Response> {
+  try {
+    const body = await req.json<any>().catch(() => ({}));
+    const message =
+      typeof body.message === "string"
+        ? body.message.trim()
+        : typeof body.prompt === "string"
+          ? body.prompt.trim()
+          : "";
+    if (!message) return json({ ok: false, error: "message requerido" }, 400);
+
+    const session_id =
+      typeof body.session_id === "string" && body.session_id
+        ? body.session_id.slice(0, 80)
+        : "default";
+
+    const useDeep = body.mode === "deep" || body.deep === true;
+    const { stub, history } = await loadHistory(env, session_id, body);
+
+    const messages = [
+      { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
+      ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
+      { role: "user", content: message },
+    ];
+
+    const { stream, model, mode } = await chatStream(env, messages, {
+      max_tokens: useDeep ? 1024 : 512,
+    });
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    let full = "";
+
+    const sse = new ReadableStream({
+      async start(controller) {
+        const send = (event: string, data: unknown) => {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          );
+        };
+        send("meta", { ok: true, model, stream_mode: mode, session_id, version: VERSION });
+
+        try {
+          const reader = stream.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            let piece = "";
+            if (typeof value === "string") piece = value;
+            else if (value instanceof Uint8Array) piece = decoder.decode(value, { stream: true });
+            else if (value && typeof value === "object") {
+              // Workers AI stream events often carry { response: "token" }
+              piece =
+                (value as any).response ||
+                (value as any).text ||
+                (value as any).delta?.content ||
+                extractToken(value);
+            }
+            if (piece) {
+              full += piece;
+              send("token", { t: piece });
+            }
+          }
+          await appendHistory(stub, message, full);
+          send("done", {
+            ok: true,
+            answer: full,
+            session_id,
+            model,
+            version: VERSION,
+          });
+          controller.close();
+        } catch (e: any) {
+          send("error", { error: String(e?.message || e).slice(0, 200) });
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(sse, {
+      status: 200,
+      headers: {
+        ...CORS,
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-ASTON-Stream": mode,
+        "X-ASTON-Model": model,
+      },
+    });
+  } catch (e: any) {
+    return json(
+      { ok: false, error: "stream unavailable", detail: String(e?.message || e).slice(0, 250) },
+      502
+    );
+  }
+}
+
+function extractToken(value: any): string {
+  try {
+    if (typeof value === "string") return value;
+    const s = JSON.stringify(value);
+    const m = s.match(/"response"\s*:\s*"((?:\\.|[^"])*)"/);
+    if (m) return JSON.parse(`"${m[1]}"`);
+  } catch {
+    /* ignore */
+  }
+  return "";
 }
 
 async function handleTts(req: Request, env: Env): Promise<Response> {
@@ -217,6 +334,7 @@ export default {
           "/health",
           "/chat",
           "/v1/chat",
+          "/v1/chat/stream",
           "/v1/solve",
           "/v1/decide",
           "/v1/models",
@@ -224,23 +342,12 @@ export default {
           "/v1/voice",
           "/v1/validate",
           "/v1/capabilities",
-          "/v1/rag/ingest",
-          "/v1/rag/query",
-          "/v1/ontology/*",
-          "/v1/graph/*",
-          "/v1/lineage",
-          "/v1/swarm/plan",
-          "/v1/simulation",
-          "/v1/mission",
-          "/v1/safety/evaluate",
-          "/v1/pii/mask",
-          "/v1/audit",
-          "/v1/etl/enqueue",
         ],
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
           "chat",
+          "chat-stream",
           "solve",
           "decide",
           "tts",
@@ -268,6 +375,7 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        streaming: { route: "/v1/chat/stream", format: "text/event-stream" },
         pdf_coverage: {
           chat_session: true,
           durable_objects: {
@@ -285,7 +393,6 @@ export default {
             r2_journal: !!env.JOURNAL,
             queues: !!(env.ETL_QUEUE || env.MISSIONS),
             hyperdrive: !!env.HYPERDRIVE,
-            note: "Bind in Cloudflare dashboard to unlock full PDF pillars without code changes",
           },
         },
       });
@@ -304,6 +411,9 @@ export default {
 
     if ((path === "/chat" || path === "/v1/chat") && req.method === "POST") {
       return handleChat(req, env, false);
+    }
+    if ((path === "/v1/chat/stream" || path === "/chat/stream") && req.method === "POST") {
+      return handleChatStream(req, env);
     }
     if (path === "/v1/solve" && req.method === "POST") return handleChat(req, env, true);
     if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env);
