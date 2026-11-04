@@ -1,6 +1,6 @@
 {
   "name": "agente-os-15-5-hector-zapata",
-  "version": "15.5.0",
+  "version": "15.5.2",
   "private": true,
   "description": "Aston OS 15.5 - Sovereign Decision OS by Hector Zapata",
   "main": "src/index.ts",
