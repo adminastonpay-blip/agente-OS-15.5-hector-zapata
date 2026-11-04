@@ -8,16 +8,47 @@ workers_dev = true
 [ai]
 binding = "AI"
 
+# ---- Durable Objects (local SQLite, no external IDs) ----
 [[durable_objects.bindings]]
 name = "SESSION"
 class_name = "SessionMemory"
+
+[[durable_objects.bindings]]
+name = "GRAPH"
+class_name = "GraphResolver"
+
+[[durable_objects.bindings]]
+name = "SUPERVISOR"
+class_name = "Supervisor"
+
+[[durable_objects.bindings]]
+name = "AGENT"
+class_name = "AgentNode"
+
+[[durable_objects.bindings]]
+name = "SIMULATION"
+class_name = "SimulationTwin"
+
+[[durable_objects.bindings]]
+name = "MISSION"
+class_name = "MissionBrain"
+
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionMemory"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["GraphResolver", "Supervisor", "AgentNode", "SimulationTwin", "MissionBrain", "SafetyInterlock"]
+
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
-DEPLOY_PROFILE = "minimal"
+DEPLOY_PROFILE = "21.0-edge"
+# Optional later (do not set fake IDs here — configure in Cloudflare dashboard):
+# DB / VECTORIZE / JOURNAL / ETL_QUEUE / MISSIONS / HYPERDRIVE

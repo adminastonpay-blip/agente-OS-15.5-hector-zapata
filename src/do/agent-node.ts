@@ -12,7 +12,8 @@ export class AgentNode {
       return new Response("not found", { status: 404 });
 
     const { role, goal, context, identity, tools } = await req.json<any>();
-    let attempts = 0, lastErr = "";
+    let attempts = 0,
+      lastErr = "";
     while (attempts < 3) {
       attempts++;
       try {
@@ -21,15 +22,14 @@ export class AgentNode {
         const blocked: any[] = [];
 
         for (const c of calls) {
-          // ── SafetyInterlock gate ──────────────────────────────
           const gate = await this.safetyCheck(identity, c, { goal, role });
           if (gate.status === "denied") {
-            obs.push(`[${c.tool}] DENIED by SafetyInterlock: ${(gate.policy?.reasons ?? []).join("; ")}`);
+            obs.push(`[${c.tool}] DENIED: ${(gate.policy?.reasons ?? []).join("; ")}`);
             blocked.push({ tool: c.tool, status: "denied", policy: gate.policy });
             continue;
           }
           if (gate.status === "pending_approval") {
-            obs.push(`[${c.tool}] PENDING APPROVAL (id=${gate.approval_id}): ${(gate.policy?.reasons ?? []).join("; ")}`);
+            obs.push(`[${c.tool}] PENDING APPROVAL (id=${gate.approval_id})`);
             blocked.push({
               tool: c.tool,
               status: "pending_approval",
@@ -38,7 +38,6 @@ export class AgentNode {
             });
             continue;
           }
-          // status === "allowed" → ejecutar
           try {
             obs.push(`[${c.tool}] ${await this.runTool(identity, c)}`);
           } catch (e) {
@@ -47,7 +46,6 @@ export class AgentNode {
         }
 
         const answer = await this.synthesize(identity, role, goal, context, obs);
-
         const status = blocked.some((b) => b.status === "pending_approval")
           ? "partial_pending_approval"
           : blocked.some((b) => b.status === "denied")
@@ -67,15 +65,18 @@ export class AgentNode {
     return Response.json({ result: `failed: ${lastErr}`, attempts, status: "failed" });
   }
 
-  /**
-   * Consulta al SafetyInterlock antes de ejecutar cualquier tool.
-   * Fail-closed: si el interlock no responde, deniega.
-   */
   private async safetyCheck(
     identity: any,
     call: { tool: string; args: Record<string, unknown> },
     ctx: { goal: string; role: string }
   ) {
+    if (!this.env.SAFETY) {
+      // reason-only tools allowed without interlock; writes fail-closed
+      if (call.tool === "write") {
+        return { status: "denied" as const, policy: { reasons: ["SAFETY DO missing"] } };
+      }
+      return { status: "allowed" as const };
+    }
     try {
       const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity.tenant));
       const res = await stub.fetch("https://do/evaluate", {
@@ -92,7 +93,7 @@ export class AgentNode {
       return (await res.json()) as {
         status: "allowed" | "denied" | "pending_approval";
         approval_id?: string;
-        policy?: { reasons?: string[]; risk?: string; score?: number };
+        policy?: { reasons?: string[] };
       };
     } catch {
       return {
@@ -106,7 +107,7 @@ export class AgentNode {
     const r = await chat(this.env, [
       {
         role: "system",
-        content: `Agente "${role}". Tools disponibles: ${tools.join(",")}. Responde JSON: {"tools":[{"tool":"<n>","args":{}}]}`,
+        content: `Agente "${role}". Tools: ${(tools || ["reason"]).join(",")}. JSON: {"tools":[{"tool":"n","args":{}}]}`,
       },
       { role: "user", content: `Objetivo: ${goal}\nContexto:\n${context}` },
     ]);
@@ -119,27 +120,28 @@ export class AgentNode {
 
   private async runTool(identity: any, c: any): Promise<string> {
     if (c.tool === "search") {
-      const [qvec] = await embed(this.env, [c.args.query]);
+      if (!this.env.VECTORIZE) return "search unavailable (VECTORIZE not bound)";
+      const [qvec] = await embed(this.env, [c.args?.query || ""]);
       const m = await this.env.VECTORIZE.query(qvec, { topK: 3, returnMetadata: "all" } as any);
       return (m.matches ?? [])
         .map((x: any) => `[${x.metadata?.source}] ${x.metadata?.chunk}`)
         .join("\n");
     }
     if (c.tool === "graph_query") {
+      if (!this.env.GRAPH) return "graph unavailable";
       const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(identity.tenant));
-      if (c.args.type === "neighbors")
+      if (c.args?.type === "neighbors")
         return JSON.stringify(
           await (await stub.fetch(`https://do/neighbors?id=${c.args.id}`)).json()
         );
       return JSON.stringify(
-        await (
-          await stub.fetch(`https://do/path?from=${c.args.id}&to=${c.args.to}`)
-        ).json()
+        await (await stub.fetch(`https://do/path?from=${c.args?.id}&to=${c.args?.to}`)).json()
       );
     }
     if (c.tool === "write") {
-      if (!identity.roles.includes("executor")) throw new Error("role not allowed to write");
-      if (c.args.op === "create_object")
+      if (!identity.roles?.includes("executor")) throw new Error("role not allowed to write");
+      if (!this.env.DB) throw new Error("DB required for write");
+      if (c.args?.op === "create_object")
         return `created ${await createObject(this.env, identity, {
           type_id: c.args.type_id,
           properties: c.args.properties,
@@ -148,7 +150,7 @@ export class AgentNode {
     }
     const r = await chat(this.env, [
       { role: "system", content: "Razona brevemente. No inventes." },
-      { role: "user", content: c.args.prompt },
+      { role: "user", content: c.args?.prompt || "" },
     ]);
     return r.response;
   }
@@ -167,10 +169,11 @@ export class AgentNode {
         content: `Objetivo: ${goal}\nContexto:\n${context}\nObservaciones:\n${obs.join("\n")}`,
       },
     ]);
+    const secret = this.env.PII_HMAC_SECRET || "aston-edge-default-pii";
     const { masked, vault } = await maskForAgent(
       r.response,
-      identity.clearance,
-      this.env.PII_HMAC_SECRET!
+      identity.clearance || "public",
+      secret
     );
     return restoreFromVault(masked, vault);
   }

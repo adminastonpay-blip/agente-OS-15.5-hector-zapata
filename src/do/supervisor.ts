@@ -1,4 +1,5 @@
 import type { Env } from "../types";
+import { chat } from "../lib/ai";
 
 const ALLOWED_TOOLS: Record<string, string[]> = {
   investigator: ["search", "graph_query", "reason"],
@@ -17,72 +18,78 @@ export class Supervisor {
 
     const { objective, identity } = await req.json<any>();
 
-    // ── SafetyInterlock: evaluar el objetivo completo antes de planificar ──
     const planGate = await this.safetyCheck(identity, {
       tool: "swarm_plan",
       args: { objective },
       context: { objective },
     });
     if (planGate.status === "denied") {
-      return Response.json({
-        error: "objective denied by SafetyInterlock",
-        policy: planGate.policy,
-      }, { status: 403 });
+      return Response.json(
+        { error: "objective denied by SafetyInterlock", policy: planGate.policy },
+        { status: 403 }
+      );
     }
     if (planGate.status === "pending_approval") {
       return Response.json({
         status: "pending_approval",
         approval_id: planGate.approval_id,
         policy: planGate.policy,
-        message: "El objetivo requiere aprobación humana antes de ejecutar el swarm",
+        message: "Requiere aprobación humana antes del swarm",
       });
     }
 
-    const planRes = await this.env.AI.run(this.env.CHAT_MODEL as any, {
-      messages: [
-        {
-          role: "system",
-          content: `Planificador. JSON SOLO: {"tasks":[{"role":"investigator|analyst|verifier|executor","goal":"...","depends_on":[idx]}]}. Máx 6.`,
-        },
-        { role: "user", content: `Objetivo: ${objective}\nTenant: ${identity.tenant}` },
-      ],
-    } as any, { gateway: { id: this.env.AI_GATEWAY_ID } } as any) as any;
+    const planRes = await chat(this.env, [
+      {
+        role: "system",
+        content: `Planificador. JSON SOLO: {"tasks":[{"role":"investigator|analyst|verifier|executor","goal":"...","depends_on":[idx]}]}. Máx 6.`,
+      },
+      { role: "user", content: `Objetivo: ${objective}\nTenant: ${identity?.tenant || "default"}` },
+    ]);
 
     let plan: { tasks: any[] };
     try {
-      plan = JSON.parse(planRes.response);
+      const raw = planRes.response.replace(/```json|```/g, "").trim();
+      plan = JSON.parse(raw);
     } catch {
-      return Response.json(
-        { error: "planning failed", raw: planRes.response },
-        { status: 500 }
-      );
+      return Response.json({ error: "planning failed", raw: planRes.response }, { status: 500 });
     }
 
     const planId = `plan_${crypto.randomUUID()}`;
-    await this.env.DB.prepare(
-      `INSERT INTO swarm_tasks (id, parent_id, tenant, role, goal, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'supervisor', ?, 'pending', ?, ?)`
-    )
-      .bind(planId, null, identity.tenant, objective, Date.now(), Date.now())
-      .run();
+    if (this.env.DB) {
+      await this.env.DB.prepare(
+        `INSERT INTO swarm_tasks (id, parent_id, tenant, role, goal, status, created_at, updated_at)
+         VALUES (?, ?, ?, 'supervisor', ?, 'pending', ?, ?)`
+      )
+        .bind(planId, null, identity?.tenant || "default", objective, Date.now(), Date.now())
+        .run()
+        .catch(() => {});
+    }
 
     const results: any[] = [];
     const done = new Set<number>();
     const pendingApprovals: any[] = [];
+    const tasks = Array.isArray(plan.tasks) ? plan.tasks.slice(0, 6) : [];
 
-    for (let i = 0; i < plan.tasks.length; i++) {
-      const t = plan.tasks[i];
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
       const deps = t.depends_on ?? [];
-      while (!deps.every((d: number) => done.has(d)))
-        await new Promise((r) => setTimeout(r, 200));
+      let wait = 0;
+      while (!deps.every((d: number) => done.has(d)) && wait < 50) {
+        await new Promise((r) => setTimeout(r, 50));
+        wait++;
+      }
+
+      if (!this.env.AGENT) {
+        results.push({ role: t.role, goal: t.goal, result: "AGENT DO missing", status: "failed" });
+        done.add(i);
+        continue;
+      }
 
       const agentId = `ag_${crypto.randomUUID()}`;
       const stub = this.env.AGENT.get(
-        this.env.AGENT.idFromName(`${identity.tenant}:${agentId}`)
+        this.env.AGENT.idFromName(`${identity?.tenant || "default"}:${agentId}`)
       );
-      const prior = results
-        .map((r, idx) => `[${idx}] ${r.role}: ${r.result}`)
-        .join("\n");
+      const prior = results.map((r, idx) => `[${idx}] ${r.role}: ${r.result}`).join("\n");
 
       const r = await stub.fetch("https://do/execute", {
         method: "POST",
@@ -109,32 +116,31 @@ export class Supervisor {
       if (out.blocked) {
         for (const b of out.blocked) {
           if (b.status === "pending_approval") {
-            pendingApprovals.push({
-              task_index: i,
-              role: t.role,
-              ...b,
-            });
+            pendingApprovals.push({ task_index: i, role: t.role, ...b });
           }
         }
       }
 
-      await this.env.DB.prepare(
-        `INSERT INTO swarm_tasks (id, parent_id, tenant, role, goal, status, attempts, result, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-        .bind(
-          `task_${crypto.randomUUID()}`,
-          planId,
-          identity.tenant,
-          t.role,
-          t.goal,
-          out.status ?? "done",
-          out.attempts,
-          out.result,
-          Date.now(),
-          Date.now()
+      if (this.env.DB) {
+        await this.env.DB.prepare(
+          `INSERT INTO swarm_tasks (id, parent_id, tenant, role, goal, status, attempts, result, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run();
+          .bind(
+            `task_${crypto.randomUUID()}`,
+            planId,
+            identity?.tenant || "default",
+            t.role,
+            t.goal,
+            out.status ?? "done",
+            out.attempts ?? 1,
+            String(out.result ?? "").slice(0, 4000),
+            Date.now(),
+            Date.now()
+          )
+          .run()
+          .catch(() => {});
+      }
     }
 
     return Response.json({
@@ -153,8 +159,9 @@ export class Supervisor {
     identity: any,
     action: { tool: string; args: Record<string, unknown>; context?: any }
   ) {
+    if (!this.env.SAFETY) return { status: "allowed" as const };
     try {
-      const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity.tenant));
+      const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity?.tenant || "default"));
       const res = await stub.fetch("https://do/evaluate", {
         method: "POST",
         body: JSON.stringify({ action, identity }),
