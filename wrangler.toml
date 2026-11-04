@@ -8,7 +8,18 @@ workers_dev = true
 [ai]
 binding = "AI"
 
-# ---- Durable Objects (local SQLite, no external IDs) ----
+# ---- D1 (already on this account) ----
+[[d1_databases]]
+binding = "DB"
+database_name = "sos-db"
+database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
+
+# ---- Queue (already on this account) ----
+[[queues.producers]]
+binding = "ETL_QUEUE"
+queue = "aston-global-queue"
+
+# ---- Durable Objects (must match production bindings) ----
 [[durable_objects.bindings]]
 name = "SESSION"
 class_name = "SessionMemory"
@@ -37,18 +48,25 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
+# Migration history MUST stay in order and keep past tags.
+# Remote is already at tag v2 — do not re-list SessionMemory under a new tag.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionMemory"]
 
 [[migrations]]
 tag = "v2"
-new_sqlite_classes = ["GraphResolver", "Supervisor", "AgentNode", "SimulationTwin", "MissionBrain", "SafetyInterlock"]
+new_sqlite_classes = [
+  "GraphResolver",
+  "Supervisor",
+  "AgentNode",
+  "SimulationTwin",
+  "MissionBrain",
+  "SafetyInterlock",
+]
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
 DEPLOY_PROFILE = "21.0-edge"
-# Optional later (do not set fake IDs here — configure in Cloudflare dashboard):
-# DB / VECTORIZE / JOURNAL / ETL_QUEUE / MISSIONS / HYPERDRIVE
