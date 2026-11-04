@@ -34,7 +34,6 @@ export async function handleV21(
   identity: Identity,
   json: (d: unknown, s?: number) => Response
 ): Promise<Response | null> {
-  // ---- RAG ingest / query ----
   if (path === "/v1/rag/ingest" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const text = String(body.text || body.content || "").trim();
@@ -73,13 +72,7 @@ export async function handleV21(
         metadata: { source },
       });
     }
-    return json({
-      ok: true,
-      chunks: ids.length,
-      ids,
-      vectorize: !!env.VECTORIZE,
-      d1: !!env.DB,
-    });
+    return json({ ok: true, chunks: ids.length, ids, vectorize: !!env.VECTORIZE, d1: !!env.DB });
   }
 
   if (path === "/v1/rag/query" && req.method === "POST") {
@@ -90,7 +83,7 @@ export async function handleV21(
       return json({
         ok: true,
         matches: [],
-        note: "VECTORIZE not bound — bind knowledge-base index to enable semantic search",
+        note: "VECTORIZE not bound — configure index knowledge-base to enable semantic search",
       });
     }
     try {
@@ -102,7 +95,6 @@ export async function handleV21(
     }
   }
 
-  // ---- Ontology ----
   if (path === "/v1/ontology/types" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     if (!env.DB) return json({ ok: false, error: "DB binding required for ontology types", pillar: "ontology" }, 503);
@@ -116,9 +108,7 @@ export async function handleV21(
 
   if (path === "/v1/ontology/objects" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
-    if (!env.DB || !env.GRAPH) {
-      return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
-    }
+    if (!env.DB || !env.GRAPH) return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
     try {
       const id = await createObject(env, identity, {
         type_id: body.type_id,
@@ -132,9 +122,7 @@ export async function handleV21(
 
   if (path === "/v1/ontology/links" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
-    if (!env.DB || !env.GRAPH) {
-      return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
-    }
+    if (!env.DB || !env.GRAPH) return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
     try {
       const id = await createLink(env, identity, {
         from_id: body.from_id,
@@ -154,7 +142,6 @@ export async function handleV21(
     return json({ ok: true, impact: rows });
   }
 
-  // ---- Graph DO proxies ----
   if (path === "/v1/graph/neighbors" && req.method === "GET") {
     if (!env.GRAPH) return json({ ok: false, error: "GRAPH DO not bound" }, 503);
     const u = new URL(req.url);
@@ -176,7 +163,6 @@ export async function handleV21(
     return json({ ok: true, ...(await res.json<any>()) });
   }
 
-  // ---- Lineage ----
   if (path === "/v1/lineage" && req.method === "GET") {
     const u = new URL(req.url);
     const objectId = u.searchParams.get("object_id") || "";
@@ -185,7 +171,6 @@ export async function handleV21(
     return json({ ok: true, events, d1: !!env.DB });
   }
 
-  // ---- Swarm / Supervisor ----
   if (path === "/v1/swarm/plan" && req.method === "POST") {
     if (!env.SUPERVISOR) return json({ ok: false, error: "SUPERVISOR DO not bound" }, 503);
     const body = await req.json<any>().catch(() => ({}));
@@ -200,33 +185,56 @@ export async function handleV21(
     return json({ ok: res.ok, ...data }, res.status);
   }
 
-  // ---- Simulation ----
-  if (path === "/v1/simulation" && req.method === "POST") {
+  // Simulation twin: /init | /apply | /evaluate | /commit
+  if (path.startsWith("/v1/simulation") && req.method === "POST") {
     if (!env.SIMULATION) return json({ ok: false, error: "SIMULATION DO not bound" }, 503);
     const body = await req.json<any>().catch(() => ({}));
+    const action = path === "/v1/simulation" ? body.action || "evaluate" : path.replace("/v1/simulation/", "");
+    const doPath =
+      action === "init"
+        ? "/init"
+        : action === "apply"
+          ? "/apply"
+          : action === "commit"
+            ? "/commit"
+            : "/evaluate";
     const stub = env.SIMULATION.get(env.SIMULATION.idFromName(identity.tenant));
-    const res = await stub.fetch("https://do/run", {
+    const payload =
+      doPath === "/commit"
+        ? { identity }
+        : doPath === "/evaluate"
+          ? { question: body.question || body.scenario || body.message || "Evaluate risks" }
+          : body;
+    const res = await stub.fetch(`https://do${doPath}`, {
       method: "POST",
-      body: JSON.stringify({ ...body, identity }),
-    });
-    const data = await res.json<any>().catch(() => ({ raw: true }));
-    return json({ ok: res.ok, ...data }, res.ok ? 200 : res.status);
-  }
-
-  // ---- Mission ----
-  if (path === "/v1/mission" && req.method === "POST") {
-    if (!env.MISSION) return json({ ok: false, error: "MISSION DO not bound" }, 503);
-    const body = await req.json<any>().catch(() => ({}));
-    const stub = env.MISSION.get(env.MISSION.idFromName(identity.tenant));
-    const res = await stub.fetch("https://do/start", {
-      method: "POST",
-      body: JSON.stringify({ ...body, identity }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json<any>().catch(() => ({}));
     return json({ ok: res.ok, ...data }, res.ok ? 200 : res.status);
   }
 
-  // ---- Safety evaluate ----
+  // Mission brain: POST /run
+  if (path === "/v1/mission" && req.method === "POST") {
+    if (!env.MISSION) return json({ ok: false, error: "MISSION DO not bound" }, 503);
+    const body = await req.json<any>().catch(() => ({}));
+    const mission = {
+      id: body.id || `m_${crypto.randomUUID()}`,
+      origin: body.origin || "https://example.com",
+      pool_id: body.pool_id || "",
+      error_code: Number(body.error_code) || 0,
+      severity: body.severity || "low",
+      created_at: Date.now(),
+      created_by: identity.actor,
+    };
+    const stub = env.MISSION.get(env.MISSION.idFromName(mission.id));
+    const res = await stub.fetch("https://do/run", {
+      method: "POST",
+      body: JSON.stringify(mission),
+    });
+    const data = await res.json<any>().catch(() => ({}));
+    return json({ ok: res.ok, ...data }, res.ok ? 200 : res.status);
+  }
+
   if (path === "/v1/safety/evaluate" && req.method === "POST") {
     if (!env.SAFETY) return json({ ok: false, error: "SAFETY DO not bound" }, 503);
     const body = await req.json<any>().catch(() => ({}));
@@ -238,7 +246,6 @@ export async function handleV21(
     return json({ ok: true, ...(await res.json<any>()) });
   }
 
-  // ---- PII mask ----
   if (path === "/v1/pii/mask" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const text = String(body.text || "");
@@ -247,13 +254,10 @@ export async function handleV21(
     return json({ ok: true, masked });
   }
 
-  // ---- Audit (D1 optional) ----
   if (path === "/v1/audit" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     if (env.DB) {
-      await env.DB.prepare(
-        `INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`
-      )
+      await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
         .bind(Date.now(), body.action || "event", identity.actor, JSON.stringify(body.detail || body))
         .run()
         .catch(() => {});
@@ -268,22 +272,15 @@ export async function handleV21(
     return json({ ok: true, persisted: { d1: !!env.DB, journal: !!env.JOURNAL } });
   }
 
-  // ---- ETL enqueue ----
   if (path === "/v1/etl/enqueue" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     if (!env.ETL_QUEUE) {
-      return json({
-        ok: true,
-        queued: false,
-        note: "ETL_QUEUE not bound — payload accepted as dry-run",
-        payload: body,
-      });
+      return json({ ok: true, queued: false, note: "ETL_QUEUE not bound — dry-run", payload: body });
     }
     await env.ETL_QUEUE.send({ ...body, actor: identity.actor, ts: Date.now() });
     return json({ ok: true, queued: true });
   }
 
-  // ---- Decision (chat + optional RAG context) ----
   if (path === "/v1/decide" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const message = String(body.message || body.objective || "").trim();
@@ -312,20 +309,12 @@ export async function handleV21(
         : [{ role: "user" as const, content: message }]),
     ]);
     if (env.DB) {
-      await env.DB.prepare(
-        `INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`
-      )
+      await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
         .bind(Date.now(), "decide", identity.actor, JSON.stringify({ message: message.slice(0, 200) }))
         .run()
         .catch(() => {});
     }
-    return json({
-      ok: true,
-      answer: out.response,
-      model: out.model,
-      rag: !!context,
-      version: "21.0-edge",
-    });
+    return json({ ok: true, answer: out.response, model: out.model, rag: !!context, version: "21.0-edge" });
   }
 
   return null;

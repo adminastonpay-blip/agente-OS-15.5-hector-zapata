@@ -29,34 +29,58 @@ export class MissionBrain {
   }
 
   private log(phase: string, action: string, status: string, detail?: string) {
-    this.sql.exec("INSERT INTO journal (ts, phase, action, status, detail) VALUES (?, ?, ?, ?, ?)",
-      Date.now(), phase, action, status, detail ?? null);
+    this.sql.exec(
+      "INSERT INTO journal (ts, phase, action, status, detail) VALUES (?, ?, ?, ?, ?)",
+      Date.now(),
+      phase,
+      action,
+      status,
+      detail ?? null
+    );
   }
 
   private async execute(m: Mission) {
     this.log("detect", "mission_received", "ok", `origin=${m.origin} err=${m.error_code}`);
 
-    // 1) Diagnóstico
     const diag = await this.diagnose(m);
     this.log("diagnose", "edge_probe", diag.reachable ? "ok" : "failed", JSON.stringify(diag));
 
-    // 2) Razonamiento con PII masking
     const prompt = `Misión recuperación. Origen: ${m.origin}. Error: ${m.error_code}. Pool: ${m.pool_id}. Diag: ${JSON.stringify(diag)}.
 JSON SOLO:
 {"text":"<hipótesis>","confidence":0.0-1.0,"action":"restart|drain|failover|isolate|none"}`;
-    const { masked, vault } = await maskForAgent(prompt, "internal", this.env.PII_HMAC_SECRET!);
-    const res = await this.env.AI.run(this.env.CHAT_MODEL as any,
-      { messages: [{ role: "user", content: masked }] } as any,
-      { gateway: { id: this.env.AI_GATEWAY_ID } } as any) as any;
-    const real = restoreFromVault(res.response, vault);
+    const secret = this.env.PII_HMAC_SECRET || "aston-edge-default-pii";
+    const { masked, vault } = await maskForAgent(prompt, "internal", secret);
+    let res: any;
+    try {
+      res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
+        messages: [{ role: "user", content: masked }],
+      } as any);
+    } catch {
+      res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
+        messages: [{ role: "user", content: masked }],
+      } as any);
+    }
+    const textOut =
+      typeof res?.response === "string"
+        ? res.response
+        : typeof res === "string"
+          ? res
+          : JSON.stringify(res);
+    const real = restoreFromVault(textOut, vault);
     let hypothesis: any;
-    try { hypothesis = JSON.parse(real); }
-    catch { hypothesis = { text: real, confidence: 0.5, action: "none" }; }
-    this.sql.exec("INSERT INTO hypothesis (ts, text, confidence, status) VALUES (?, ?, ?, 'open')",
-      Date.now(), hypothesis.text, hypothesis.confidence);
+    try {
+      hypothesis = JSON.parse(real.replace(/```json|```/g, "").trim());
+    } catch {
+      hypothesis = { text: real, confidence: 0.5, action: "none" };
+    }
+    this.sql.exec(
+      "INSERT INTO hypothesis (ts, text, confidence, status) VALUES (?, ?, ?, 'open')",
+      Date.now(),
+      hypothesis.text,
+      hypothesis.confidence ?? 0.5
+    );
     this.log("diagnose", "hypothesis_created", "ok", hypothesis.text);
 
-    // 3) Contención
     let restored = false;
     if (!diag.reachable || diag.degraded) {
       const action = await this.containAndRestore(m, hypothesis);
@@ -64,38 +88,51 @@ JSON SOLO:
       restored = action.status === "ok";
     }
 
-    // 4) Verificación
     if (restored) {
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 500));
       const ok = await this.verify(m);
       this.log("verify", "post_restore_check", ok ? "ok" : "failed");
       restored = ok;
     }
 
-    // 5) Persistir journal a R2
     const journal = this.sql.exec("SELECT * FROM journal").toArray();
-    await this.env.JOURNAL.put(`missions/${m.id}/journal.json`,
-      JSON.stringify({ mission: m, journal, hypothesis }));
+    if (this.env.JOURNAL) {
+      await this.env.JOURNAL.put(
+        `missions/${m.id}/journal.json`,
+        JSON.stringify({ mission: m, journal, hypothesis })
+      ).catch(() => {});
+    }
 
-    return { mission_id: m.id, restored, hypothesis: hypothesis.text };
+    return { mission_id: m.id, restored, hypothesis: hypothesis.text, journal_persisted: !!this.env.JOURNAL };
   }
 
   private async diagnose(m: Mission) {
     const t0 = Date.now();
     try {
       const r = await fetch(m.origin, { method: "HEAD", signal: AbortSignal.timeout(3000) });
-      return { reachable: r.ok, status: r.status, latency_ms: Date.now() - t0,
-        degraded: !r.ok && r.status < 500 };
-    } catch { return { reachable: false, status: 0, latency_ms: Date.now() - t0, degraded: false }; }
+      return {
+        reachable: r.ok,
+        status: r.status,
+        latency_ms: Date.now() - t0,
+        degraded: !r.ok && r.status < 500,
+      };
+    } catch {
+      return { reachable: false, status: 0, latency_ms: Date.now() - t0, degraded: false };
+    }
   }
 
   private async containAndRestore(m: Mission, h: any) {
-    if ((h.action === "failover" || m.severity === "critical") && this.env.CF_API_TOKEN) {
+    if ((h.action === "failover" || m.severity === "critical") && (this.env as any).CF_API_TOKEN) {
       const r = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/load_balancers/pools/${m.pool_id}`,
-        { method: "PATCH",
-          headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: false }) }
+        `https://api.cloudflare.com/client/v4/accounts/${(this.env as any).CF_ACCOUNT_ID}/load_balancers/pools/${m.pool_id}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${(this.env as any).CF_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ enabled: false }),
+        }
       );
       return { name: "disable_pool", status: r.ok ? "ok" : "failed", detail: `status=${r.status}` };
     }
@@ -106,6 +143,8 @@ JSON SOLO:
     try {
       const r = await fetch(m.origin, { method: "HEAD", signal: AbortSignal.timeout(3000) });
       return r.ok;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 }
