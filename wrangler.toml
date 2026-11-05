@@ -1,7 +1,8 @@
 name = "agente-os-15-5-hector-zapata"
 main = "src/index.ts"
 compatibility_date = "2026-11-03"
-compatibility_flags = ["nodejs_compat"]
+# nodejs_compat + post-quantum WebCrypto (ML-KEM / ML-DSA)
+compatibility_flags = ["nodejs_compat", "webcrypto_modern_algorithms"]
 upload_source_maps = true
 workers_dev = true
 
@@ -48,8 +49,7 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-# Migration history MUST stay in order and keep past tags.
-# Remote is already at tag v2 — do not re-list SessionMemory under a new tag.
+# Migration history — DO NOT edit tags or re-list SessionMemory
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionMemory"]
@@ -69,4 +69,4 @@ new_sqlite_classes = [
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
-DEPLOY_PROFILE = "21.0-edge"
+DEPLOY_PROFILE = "21.1-sovereign"

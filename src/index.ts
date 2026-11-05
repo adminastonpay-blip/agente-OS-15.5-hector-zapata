@@ -16,6 +16,8 @@ import {
 } from "./lib/skills";
 import { resolveIdentity } from "./lib/identity";
 import { handleV21, pillarStatus } from "./routes/v21";
+import { handleSovereign } from "./routes/sovereign";
+import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
   SessionMemory,
@@ -27,12 +29,13 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.0.1-stream";
+const VERSION = "21.1.0-sovereign";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Sensor-Key",
+  "Access-Control-Allow-Headers":
+    "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Sensor-Key",
 };
 
 const json = (d: unknown, s = 200) =>
@@ -141,7 +144,6 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
   }
 }
 
-/** SSE stream — does not replace /v1/chat */
 async function handleChatStream(req: Request, env: Env): Promise<Response> {
   try {
     const body = await req.json<any>().catch(() => ({}));
@@ -193,12 +195,11 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
             if (typeof value === "string") piece = value;
             else if (value instanceof Uint8Array) piece = decoder.decode(value, { stream: true });
             else if (value && typeof value === "object") {
-              // Workers AI stream events often carry { response: "token" }
               piece =
                 (value as any).response ||
                 (value as any).text ||
                 (value as any).delta?.content ||
-                extractToken(value);
+                "";
             }
             if (piece) {
               full += piece;
@@ -206,13 +207,7 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
             }
           }
           await appendHistory(stub, message, full);
-          send("done", {
-            ok: true,
-            answer: full,
-            session_id,
-            model,
-            version: VERSION,
-          });
+          send("done", { ok: true, answer: full, session_id, model, version: VERSION });
           controller.close();
         } catch (e: any) {
           send("error", { error: String(e?.message || e).slice(0, 200) });
@@ -238,18 +233,6 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
       502
     );
   }
-}
-
-function extractToken(value: any): string {
-  try {
-    if (typeof value === "string") return value;
-    const s = JSON.stringify(value);
-    const m = s.match(/"response"\s*:\s*"((?:\\.|[^"])*)"/);
-    if (m) return JSON.parse(`"${m[1]}"`);
-  } catch {
-    /* ignore */
-  }
-  return "";
 }
 
 async function handleTts(req: Request, env: Env): Promise<Response> {
@@ -320,16 +303,32 @@ export default {
     const path = u.pathname.replace(/\/+$/, "") || "/";
     const identity = await resolveIdentity(req, env);
 
+    // Soft plan limits (logical multi-tenant)
+    const cl = Number(req.headers.get("content-length") || 0);
+    if (cl > 0) {
+      const gate = enforceTenantBodyLimit(identity, cl, planFromIdentity(identity, req.headers.get("X-Aston-Plan")));
+      if (!gate.ok) return json({ ok: false, error: gate.error, limit: gate.limit }, 413);
+    }
+
     if (path === "/" || path === "/health") {
       const pillars = pillarStatus(env);
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "ASTON OS 21.0",
+        product: "ASTON OS 21.1 Sovereign",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.0-edge",
+        profile: env.DEPLOY_PROFILE ?? "21.1-sovereign",
         pillars,
+        sovereign_routes: [
+          "/v1/sovereign/status",
+          "/v1/sovereign/tenant",
+          "/v1/crypto/pq",
+          "/v1/crypto/identity",
+          "/v1/crypto/sign",
+          "/v1/sandbox/exec",
+          "/v1/ai/routes",
+        ],
         routes: [
           "/health",
           "/chat",
@@ -354,10 +353,12 @@ export default {
           "voice",
           "validate",
           "session-memory",
-          "agent-actions",
+          "sovereign-tenant",
+          "post-quantum",
+          "sandbox-hook",
+          "ai-gateway-routing",
           "ontology",
           "graph",
-          "lineage",
           "swarm",
           "simulation",
           "mission",
@@ -376,25 +377,7 @@ export default {
         version: VERSION,
         pillars: pillarStatus(env),
         streaming: { route: "/v1/chat/stream", format: "text/event-stream" },
-        pdf_coverage: {
-          chat_session: true,
-          durable_objects: {
-            session: !!env.SESSION,
-            graph: !!env.GRAPH,
-            supervisor: !!env.SUPERVISOR,
-            agent: !!env.AGENT,
-            simulation: !!env.SIMULATION,
-            mission: !!env.MISSION,
-            safety: !!env.SAFETY,
-          },
-          optional_cloud_resources: {
-            d1: !!env.DB,
-            vectorize: !!env.VECTORIZE,
-            r2_journal: !!env.JOURNAL,
-            queues: !!(env.ETL_QUEUE || env.MISSIONS),
-            hyperdrive: !!env.HYPERDRIVE,
-          },
-        },
+        sovereign: true,
       });
     }
 
@@ -438,6 +421,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const sov = await handleSovereign(path, req, env, identity, json);
+    if (sov) return sov;
 
     const v21 = await handleV21(path, req, env, identity, json);
     if (v21) return v21;
