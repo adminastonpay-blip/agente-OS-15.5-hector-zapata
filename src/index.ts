@@ -18,6 +18,7 @@ import { resolveIdentity } from "./lib/identity";
 import { handleV21, pillarStatus } from "./routes/v21";
 import { handleSovereign } from "./routes/sovereign";
 import { handleFactory } from "./routes/factory";
+import { handleDefense } from "./routes/defense";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -30,7 +31,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.2.0-factory";
+const VERSION = "21.3.0-defense";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -319,56 +320,38 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "ASTON OS Agent Economy",
+        product: "ASTON OS Defense + Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.2-factory",
+        profile: env.DEPLOY_PROFILE ?? "21.3-defense",
         pillars,
+        defense: {
+          ingest: "/v1/defense/ingest",
+          triage: "/v1/defense/triage",
+          investigate: "/v1/defense/investigate",
+          incidents: "/v1/defense/incidents",
+          approve: "/v1/defense/approve",
+          status: "/v1/defense/status",
+        },
         factory: {
           generate: "/v1/factory/generate",
           run: "/v1/factory/run",
           tools: "/v1/factory/tools",
-          simulate: "/v1/factory/simulate",
         },
-        sovereign_routes: [
-          "/v1/sovereign/status",
-          "/v1/sovereign/tenant",
-          "/v1/crypto/pq",
-          "/v1/crypto/identity",
-          "/v1/crypto/sign",
-          "/v1/sandbox/exec",
-          "/v1/ai/routes",
-        ],
-        routes: [
-          "/health",
-          "/chat",
-          "/v1/chat",
-          "/v1/chat/stream",
-          "/v1/solve",
-          "/v1/factory/generate",
-          "/v1/factory/run",
-          "/v1/factory/tools",
-        ],
+        routes: ["/health", "/v1/chat", "/v1/chat/stream", "/v1/defense/ingest", "/v1/factory/generate"],
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
           "chat",
-          "chat-stream",
-          "solve",
+          "autodefense",
           "micro-saas-factory",
-          "agent-economy-wedge",
           "sovereign-tenant",
           "post-quantum",
-          "sandbox-hook",
-          "tts",
-          "voice",
-          "ontology",
+          "safety-interlock",
           "swarm",
           "simulation",
-          "mission",
-          "safety",
-          "rag",
-          "etl",
+          "tts",
+          "voice",
         ],
       });
     }
@@ -378,9 +361,8 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        defense: true,
         factory: true,
-        agent_economy_wedge: true,
-        streaming: { route: "/v1/chat/stream", format: "text/event-stream" },
         sovereign: true,
       });
     }
@@ -430,6 +412,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const defense = await handleDefense(path, req, env, identity, json);
+    if (defense) return defense;
 
     const factory = await handleFactory(path, req, env, identity, json);
     if (factory) return factory;
