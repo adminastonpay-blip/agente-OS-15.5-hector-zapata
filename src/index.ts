@@ -17,6 +17,7 @@ import {
 import { resolveIdentity } from "./lib/identity";
 import { handleV21, pillarStatus } from "./routes/v21";
 import { handleSovereign } from "./routes/sovereign";
+import { handleFactory } from "./routes/factory";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -29,7 +30,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.1.0-sovereign";
+const VERSION = "21.2.0-factory";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -303,10 +304,13 @@ export default {
     const path = u.pathname.replace(/\/+$/, "") || "/";
     const identity = await resolveIdentity(req, env);
 
-    // Soft plan limits (logical multi-tenant)
     const cl = Number(req.headers.get("content-length") || 0);
     if (cl > 0) {
-      const gate = enforceTenantBodyLimit(identity, cl, planFromIdentity(identity, req.headers.get("X-Aston-Plan")));
+      const gate = enforceTenantBodyLimit(
+        identity,
+        cl,
+        planFromIdentity(identity, req.headers.get("X-Aston-Plan"))
+      );
       if (!gate.ok) return json({ ok: false, error: gate.error, limit: gate.limit }, 413);
     }
 
@@ -315,11 +319,17 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "ASTON OS 21.1 Sovereign",
+        product: "ASTON OS Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.1-sovereign",
+        profile: env.DEPLOY_PROFILE ?? "21.2-factory",
         pillars,
+        factory: {
+          generate: "/v1/factory/generate",
+          run: "/v1/factory/run",
+          tools: "/v1/factory/tools",
+          simulate: "/v1/factory/simulate",
+        },
         sovereign_routes: [
           "/v1/sovereign/status",
           "/v1/sovereign/tenant",
@@ -335,12 +345,9 @@ export default {
           "/v1/chat",
           "/v1/chat/stream",
           "/v1/solve",
-          "/v1/decide",
-          "/v1/models",
-          "/v1/tts",
-          "/v1/voice",
-          "/v1/validate",
-          "/v1/capabilities",
+          "/v1/factory/generate",
+          "/v1/factory/run",
+          "/v1/factory/tools",
         ],
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
@@ -348,24 +355,19 @@ export default {
           "chat",
           "chat-stream",
           "solve",
-          "decide",
-          "tts",
-          "voice",
-          "validate",
-          "session-memory",
+          "micro-saas-factory",
+          "agent-economy-wedge",
           "sovereign-tenant",
           "post-quantum",
           "sandbox-hook",
-          "ai-gateway-routing",
+          "tts",
+          "voice",
           "ontology",
-          "graph",
           "swarm",
           "simulation",
           "mission",
           "safety",
           "rag",
-          "pii",
-          "audit",
           "etl",
         ],
       });
@@ -376,6 +378,8 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        factory: true,
+        agent_economy_wedge: true,
         streaming: { route: "/v1/chat/stream", format: "text/event-stream" },
         sovereign: true,
       });
@@ -402,7 +406,12 @@ export default {
     if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env);
     if (path === "/v1/voice" && req.method === "POST") return handleVoice(req, env);
     if (path === "/v1/voice/profiles" && req.method === "GET") {
-      return json({ ok: true, default: "aston_executive", profiles: Object.values(VOICE_PROFILES), version: VERSION });
+      return json({
+        ok: true,
+        default: "aston_executive",
+        profiles: Object.values(VOICE_PROFILES),
+        version: VERSION,
+      });
     }
     if (path === "/v1/validate" && req.method === "POST") {
       const body = await req.json<any>().catch(() => ({}));
@@ -421,6 +430,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const factory = await handleFactory(path, req, env, identity, json);
+    if (factory) return factory;
 
     const sov = await handleSovereign(path, req, env, identity, json);
     if (sov) return sov;
