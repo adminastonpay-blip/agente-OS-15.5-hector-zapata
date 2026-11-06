@@ -189,3 +189,38 @@ CREATE TABLE IF NOT EXISTS decision_feedback (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_decision_feedback ON decision_feedback(decision_id, created_at DESC);
+
+-- ===== Governed Agents: Plans =====
+CREATE TABLE IF NOT EXISTS agent_plans (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_approval',
+  budget_calls INTEGER NOT NULL DEFAULT 10,
+  budget_cost REAL NOT NULL DEFAULT 0,
+  used_calls INTEGER NOT NULL DEFAULT 0,
+  used_cost REAL NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_plans_tenant ON agent_plans(tenant, status, created_at DESC);
+
+-- ===== Governed Agents: Actions =====
+CREATE TABLE IF NOT EXISTS agent_actions (
+  id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  tenant TEXT NOT NULL,
+  action TEXT NOT NULL,
+  object_type TEXT NOT NULL,
+  target_id TEXT,
+  payload TEXT,
+  estimated_cost REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  result TEXT,
+  actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  executed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_plan ON agent_actions(plan_id, created_at);

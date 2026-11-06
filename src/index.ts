@@ -22,6 +22,7 @@ import { handleDefense } from "./routes/defense";
 import { handleTrust } from "./ontology/trust";
 import { handleAccess } from "./access/access";
 import { handleDecisions } from "./decisions/decisions";
+import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -34,7 +35,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.6.0-decision-objects";
+const VERSION = "21.7.0-governed-agents";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -323,8 +324,13 @@ export default {
         product: "ASTON OS Defense + Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.6-decision-objects",
+        profile: env.DEPLOY_PROFILE ?? "21.7-governed-agents",
         pillars,
+        governed_agents: {
+          plans: "/v1/agents/plans",
+          approve: "/v1/agents/plans/:id/approve",
+          execute: "/v1/agents/plans/:id/execute",
+        },
         decision_layer: {
           decisions: "/v1/decisions",
           evidence: "/v1/decisions/:id/evidence",
@@ -377,6 +383,9 @@ export default {
           "decision-objects",
           "decision-evidence",
           "decision-feedback",
+          "governed-agent-plans",
+          "agent-budgets",
+          "plan-approve-execute",
         ],
       });
     }
@@ -392,6 +401,7 @@ export default {
         trust_layer: true,
         access_layer: true,
         decision_layer: true,
+        governed_agents: true,
       });
     }
 
@@ -440,6 +450,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const governed = await handleGovernedAgents(path, req, env, identity, json);
+    if (governed) return governed;
 
     const decisions = await handleDecisions(path, req, env, identity, json);
     if (decisions) return decisions;
