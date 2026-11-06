@@ -1,6 +1,7 @@
 import type { Env, Identity } from "../types";
 import { emitLineage } from "../lineage";
 import { evaluateAccess } from "../access/access";
+import { gateAgentExposure, loadEnvelope, defaultEnvelope } from "../risk/envelope";
 
 export type PlanStatus =
   | "pending_approval"
@@ -16,6 +17,7 @@ export type GovernedAction = {
   target_id?: string;
   payload?: Record<string, unknown>;
   estimated_cost?: number;
+  estimated_exposure?: number;
 };
 
 export async function createPlan(
@@ -27,6 +29,7 @@ export async function createPlan(
     steps: GovernedAction[];
     budget_calls?: number;
     budget_cost?: number;
+    max_exposure?: number;
   }
 ) {
   if (!env.DB) throw new Error("DB binding required");
@@ -44,27 +47,45 @@ export async function createPlan(
     throw new Error(`access_denied:${access.reason}`);
   }
 
+  const agent_id = input.agent_id ?? "default-agent";
+  const totalExposure = input.steps.reduce(
+    (s, st) => s + Number(st.estimated_exposure ?? st.estimated_cost ?? 0),
+    0
+  );
+  const envelope =
+    (await loadEnvelope(env, id.tenant, agent_id)) || defaultEnvelope(agent_id, id.tenant);
+  const maxExposure = input.max_exposure ?? envelope.max_exposure_usd;
+
+  // Pre-check: plan total exposure vs envelope
+  let riskGate: { allowed: boolean; reasons: string[]; arr_score?: number } = {
+    allowed: true,
+    reasons: [],
+  };
+  if (totalExposure > 0) {
+    const g = await gateAgentExposure(env, id.tenant, agent_id, totalExposure);
+    riskGate = {
+      allowed: g.allowed || totalExposure <= maxExposure,
+      reasons: g.reasons,
+      arr_score: g.arr.arr_score,
+    };
+    if (totalExposure > maxExposure) {
+      riskGate.allowed = false;
+      if (!riskGate.reasons.includes("exposure_cap")) riskGate.reasons.push("exposure_cap");
+    }
+  }
+
   const planId = `plan_${crypto.randomUUID()}`;
   const now = Date.now();
   const budgetCalls = Math.max(1, Math.min(input.budget_calls ?? 10, 100));
   const budgetCost = Math.max(0, input.budget_cost ?? 0);
+  const status = riskGate.allowed ? "pending_approval" : "pending_approval";
 
   await env.DB.prepare(
     `INSERT INTO agent_plans
        (id, tenant, agent_id, goal, status, budget_calls, budget_cost, used_calls, used_cost, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'pending_approval', ?, ?, 0, 0, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`
   )
-    .bind(
-      planId,
-      id.tenant,
-      input.agent_id ?? "default-agent",
-      input.goal,
-      budgetCalls,
-      budgetCost,
-      id.actor,
-      now,
-      now
-    )
+    .bind(planId, id.tenant, agent_id, input.goal, status, budgetCalls, budgetCost, id.actor, now, now)
     .run();
 
   for (const step of input.steps) {
@@ -80,7 +101,10 @@ export async function createPlan(
         step.action,
         step.object_type,
         step.target_id ?? null,
-        JSON.stringify(step.payload ?? {}),
+        JSON.stringify({
+          ...(step.payload ?? {}),
+          estimated_exposure: step.estimated_exposure ?? step.estimated_cost ?? 0,
+        }),
         step.estimated_cost ?? 0,
         id.actor,
         now
@@ -91,23 +115,31 @@ export async function createPlan(
   await emitLineage(env, {
     object_id: planId,
     transformation: "agent.plan.created",
-    pipeline_version: "v1",
+    pipeline_version: "v1-risk",
     actor: id.actor,
-    metadata: { goal: input.goal, steps: input.steps.length },
+    metadata: {
+      goal: input.goal,
+      steps: input.steps.length,
+      total_exposure: totalExposure,
+      max_exposure: maxExposure,
+      risk_gate: riskGate,
+    },
   });
 
   return {
     plan_id: planId,
-    status: "pending_approval",
+    status,
     budget_calls: budgetCalls,
     budget_cost: budgetCost,
+    max_exposure: maxExposure,
+    total_exposure: totalExposure,
+    risk_gate: riskGate,
+    requires_human: !riskGate.allowed || totalExposure > maxExposure * 0.5,
   };
 }
 
 async function getPlan(env: Env, tenant: string, planId: string) {
-  return env.DB.prepare(
-    `SELECT * FROM agent_plans WHERE tenant = ? AND id = ?`
-  )
+  return env.DB!.prepare(`SELECT * FROM agent_plans WHERE tenant = ? AND id = ?`)
     .bind(tenant, planId)
     .first<any>();
 }
@@ -115,10 +147,7 @@ async function getPlan(env: Env, tenant: string, planId: string) {
 export async function listPlans(env: Env, id: Identity, limit = 50) {
   if (!env.DB) return [];
   const rows = await env.DB.prepare(
-    `SELECT * FROM agent_plans
-     WHERE tenant = ?
-     ORDER BY created_at DESC
-     LIMIT ?`
+    `SELECT * FROM agent_plans WHERE tenant = ? ORDER BY created_at DESC LIMIT ?`
   )
     .bind(id.tenant, limit)
     .all();
@@ -127,18 +156,13 @@ export async function listPlans(env: Env, id: Identity, limit = 50) {
 
 export async function getPlanDetail(env: Env, id: Identity, planId: string) {
   if (!env.DB) throw new Error("DB binding required");
-
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) return null;
-
   const actions = await env.DB.prepare(
-    `SELECT * FROM agent_actions
-     WHERE tenant = ? AND plan_id = ?
-     ORDER BY created_at`
+    `SELECT * FROM agent_actions WHERE tenant = ? AND plan_id = ? ORDER BY created_at`
   )
     .bind(id.tenant, planId)
     .all();
-
   return {
     ...plan,
     actions: (actions.results ?? []).map((a: any) => ({
@@ -155,7 +179,6 @@ export async function approvePlan(
   input: { approve: boolean; reason?: string }
 ) {
   if (!env.DB) throw new Error("DB binding required");
-
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
 
@@ -165,16 +188,11 @@ export async function approvePlan(
     purpose: "agent",
     resource_id: planId,
   });
-
-  if (access.effect === "deny") {
-    throw new Error(`access_denied:${access.reason}`);
-  }
+  if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
 
   const status = input.approve ? "approved" : "rejected";
   await env.DB.prepare(
-    `UPDATE agent_plans
-     SET status = ?, updated_at = ?
-     WHERE tenant = ? AND id = ?`
+    `UPDATE agent_plans SET status = ?, updated_at = ? WHERE tenant = ? AND id = ?`
   )
     .bind(status, Date.now(), id.tenant, planId)
     .run();
@@ -182,7 +200,7 @@ export async function approvePlan(
   await emitLineage(env, {
     object_id: planId,
     transformation: input.approve ? "agent.plan.approved" : "agent.plan.rejected",
-    pipeline_version: "v1",
+    pipeline_version: "v1-risk",
     actor: id.actor,
     metadata: { reason: input.reason ?? null },
   });
@@ -192,12 +210,9 @@ export async function approvePlan(
 
 export async function executePlan(env: Env, id: Identity, planId: string) {
   if (!env.DB) throw new Error("DB binding required");
-
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
-  if (plan.status !== "approved") {
-    throw new Error(`plan_not_approved:${plan.status}`);
-  }
+  if (plan.status !== "approved") throw new Error(`plan_not_approved:${plan.status}`);
 
   const access = await evaluateAccess(env, id, {
     action: "execute",
@@ -205,30 +220,26 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     purpose: "agent",
     resource_id: planId,
   });
-
-  if (access.effect === "deny") {
-    throw new Error(`access_denied:${access.reason}`);
-  }
+  if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
 
   await env.DB.prepare(
-    `UPDATE agent_plans SET status = 'executing', updated_at = ?
-     WHERE tenant = ? AND id = ?`
+    `UPDATE agent_plans SET status = 'executing', updated_at = ? WHERE tenant = ? AND id = ?`
   )
     .bind(Date.now(), id.tenant, planId)
     .run();
 
   const actions = await env.DB.prepare(
-    `SELECT * FROM agent_actions
-     WHERE tenant = ? AND plan_id = ? AND status = 'proposed'
-     ORDER BY created_at`
+    `SELECT * FROM agent_actions WHERE tenant = ? AND plan_id = ? AND status = 'proposed' ORDER BY created_at`
   )
     .bind(id.tenant, planId)
     .all();
 
   let usedCalls = plan.used_calls ?? 0;
   let usedCost = plan.used_cost ?? 0;
+  let usedExposure = 0;
   let failed = false;
   let failureReason = "";
+  const riskBlocks: string[] = [];
 
   for (const action of (actions.results ?? []) as any[]) {
     if (usedCalls >= plan.budget_calls) {
@@ -242,6 +253,38 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
       failed = true;
       failureReason = "budget_cost_exhausted";
       break;
+    }
+
+    let payload: any = {};
+    try {
+      payload = JSON.parse(action.payload || "{}");
+    } catch {
+      payload = {};
+    }
+    const stepExposure = Number(payload.estimated_exposure ?? estimatedCost ?? 0);
+
+    if (stepExposure > 0) {
+      const g = await gateAgentExposure(
+        env,
+        id.tenant,
+        plan.agent_id || "default-agent",
+        stepExposure
+      );
+      if (!g.allowed) {
+        await env.DB.prepare(
+          `UPDATE agent_actions SET status = 'blocked', result = ?, executed_at = ? WHERE id = ?`
+        )
+          .bind(
+            JSON.stringify({ risk_blocked: true, reasons: g.reasons, arr_score: g.arr.arr_score }),
+            Date.now(),
+            action.id
+          )
+          .run();
+        riskBlocks.push(action.id);
+        failed = true;
+        failureReason = `risk_envelope:${g.reasons.join(",")}`;
+        break;
+      }
     }
 
     const accessAction =
@@ -262,53 +305,47 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
 
     if (actionAccess.effect === "deny") {
       await env.DB.prepare(
-        `UPDATE agent_actions
-         SET status = 'blocked', result = ?, executed_at = ?
-         WHERE id = ?`
+        `UPDATE agent_actions SET status = 'blocked', result = ?, executed_at = ? WHERE id = ?`
       )
         .bind(`access_denied:${actionAccess.reason}`, Date.now(), action.id)
         .run();
-
       failed = true;
       failureReason = `action_blocked:${action.id}`;
       break;
     }
 
-    // Ejecución gobernada: deja el punto de integración listo para APIs reales.
     const result = {
       simulated: true,
       action: action.action,
       object_type: action.object_type,
       target_id: action.target_id ?? null,
       access_decision_id: actionAccess.decision_id,
+      exposure: stepExposure,
     };
 
     await env.DB.prepare(
-      `UPDATE agent_actions
-       SET status = 'executed', result = ?, executed_at = ?
-       WHERE id = ?`
+      `UPDATE agent_actions SET status = 'executed', result = ?, executed_at = ? WHERE id = ?`
     )
       .bind(JSON.stringify(result), Date.now(), action.id)
       .run();
 
     usedCalls += 1;
     usedCost += estimatedCost;
+    usedExposure += stepExposure;
 
     await emitLineage(env, {
       object_id: planId,
       parent_ids: action.target_id ? [action.target_id] : [],
       transformation: "agent.action.executed",
-      pipeline_version: "v1",
+      pipeline_version: "v1-risk",
       actor: id.actor,
-      metadata: { action_id: action.id, action: action.action },
+      metadata: { action_id: action.id, action: action.action, exposure: stepExposure },
     });
   }
 
   const finalStatus = failed ? "failed" : "completed";
   await env.DB.prepare(
-    `UPDATE agent_plans
-     SET status = ?, used_calls = ?, used_cost = ?, updated_at = ?
-     WHERE tenant = ? AND id = ?`
+    `UPDATE agent_plans SET status = ?, used_calls = ?, used_cost = ?, updated_at = ? WHERE tenant = ? AND id = ?`
   )
     .bind(finalStatus, usedCalls, usedCost, Date.now(), id.tenant, planId)
     .run();
@@ -318,6 +355,8 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     status: finalStatus,
     used_calls: usedCalls,
     used_cost: usedCost,
+    used_exposure: usedExposure,
+    risk_blocks: riskBlocks.length ? riskBlocks : undefined,
     failure_reason: failureReason || null,
   };
 }

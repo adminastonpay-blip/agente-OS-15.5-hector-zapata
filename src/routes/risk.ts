@@ -1,54 +1,13 @@
 import type { Env, Identity } from "../types";
+import { computeArr, defaultEnvelope, envelopeAllows, quotePolicy, type RiskEnvelope } from "../risk/arr";
 import {
-  computeArr,
-  defaultEnvelope,
-  envelopeAllows,
-  quotePolicy,
-  type RiskEnvelope,
-  type ArrResult,
-} from "../risk/arr";
+  saveEnvelope,
+  loadEnvelope,
+  listEnvelopes,
+  assessDecision,
+} from "../risk/envelope";
 import { recordDecision } from "../provenance/replay";
 import { getPassport } from "../economy/reputation";
-
-async function saveEnvelope(env: Env, e: RiskEnvelope) {
-  if (!env.DB) return;
-  try {
-    await env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS risk_envelopes (
-        agent_id TEXT PRIMARY KEY,
-        tenant TEXT,
-        payload TEXT,
-        updated_at INTEGER
-      )`
-    ).run();
-    await env.DB.prepare(
-      `INSERT OR REPLACE INTO risk_envelopes (agent_id, tenant, payload, updated_at) VALUES (?, ?, ?, ?)`
-    )
-      .bind(e.agent_id, e.tenant, JSON.stringify(e), e.updated_at)
-      .run();
-  } catch (err) {
-    console.error("[ENVELOPE]", String(err));
-  }
-}
-
-async function loadEnvelope(
-  env: Env,
-  tenant: string,
-  agent_id: string
-): Promise<RiskEnvelope | null> {
-  if (!env.DB) return null;
-  try {
-    const row = await env.DB.prepare(
-      `SELECT payload FROM risk_envelopes WHERE agent_id = ? AND tenant = ?`
-    )
-      .bind(agent_id, tenant)
-      .first<{ payload: string }>();
-    if (!row?.payload) return null;
-    return JSON.parse(row.payload) as RiskEnvelope;
-  } catch {
-    return null;
-  }
-}
 
 async function savePolicy(env: Env, policy: ReturnType<typeof quotePolicy>) {
   if (!env.DB) return;
@@ -78,7 +37,6 @@ export async function handleRisk(
   identity: Identity,
   json: (d: unknown, s?: number) => Response
 ): Promise<Response | null> {
-  // Pure ARR score
   if (path === "/v1/risk/score" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const arr = computeArr({
@@ -93,10 +51,46 @@ export async function handleRisk(
       exposure_usd: body.exposure_usd,
       domain: body.domain,
     });
-    return json({ ok: true, protocol: "ARR-v0", ...arr });
+    return json({ ok: true, protocol: "ARR-v1", ...arr });
   }
 
-  // Full: score + optional provenance + policy quote + envelope gate
+  // Risk Envelope v1 assess
+  if ((path === "/v1/risk/assess" || path === "/v1/risk/assessment") && req.method === "POST") {
+    const body = await req.json<any>().catch(() => ({}));
+    const tenant = identity.tenant || "default";
+    let agent_trust_score = Number(body.agent_trust_score) || 50;
+    const agent_id = String(body.agent_id || "default-agent").slice(0, 64);
+    try {
+      const p = await getPassport(env, tenant, agent_id);
+      if (p) agent_trust_score = p.trust_score;
+    } catch {
+      /* optional */
+    }
+    const result = await assessDecision(env, tenant, {
+      agent_id,
+      estimated_exposure: Number(body.estimated_exposure ?? body.exposure_usd ?? 0),
+      exposure_usd: Number(body.estimated_exposure ?? body.exposure_usd ?? 0),
+      evidence_count: Array.isArray(body.evidence)
+        ? body.evidence.length
+        : Number(body.evidence_count) || 0,
+      data_freshness_hours: body.data_freshness_hours,
+      action_risk_score: body.action_risk_score,
+      agent_trust_score,
+      impact_depth: body.impact_depth,
+      reversible: body.reversible !== false,
+      human_approved: !!body.human_approved,
+      domain: body.domain || "logistics",
+    });
+    return json({
+      ok: true,
+      protocol: "ARR-v1",
+      ...result,
+      summary: result.gate.allowed
+        ? `Agent may act within envelope (max $${result.envelope.max_exposure_usd})`
+        : `Blocked: ${result.gate.reasons.join(", ")}`,
+    });
+  }
+
   if (path === "/v1/risk/underwrite" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const question = String(body.question || body.message || "").trim();
@@ -114,30 +108,31 @@ export async function handleRisk(
       /* optional */
     }
 
-    const arr = computeArr({
-      evidence_count: Array.isArray(body.evidence) ? body.evidence.length : Number(body.evidence_count) || 0,
+    const assessed = await assessDecision(env, tenant, {
+      agent_id,
+      estimated_exposure: exposure_usd,
+      exposure_usd,
+      evidence_count: Array.isArray(body.evidence)
+        ? body.evidence.length
+        : Number(body.evidence_count) || 0,
       data_freshness_hours: body.data_freshness_hours,
       action_risk_score: body.action_risk_score,
       agent_trust_score,
       impact_depth: body.impact_depth,
       reversible: body.reversible !== false,
       human_approved: !!body.human_approved,
-      exposure_usd,
       domain: body.domain || "logistics",
     });
 
-    let envelope =
-      (await loadEnvelope(env, tenant, agent_id)) ||
-      defaultEnvelope(agent_id, tenant, body.domain || "logistics");
+    let envelope = assessed.envelope;
     if (body.envelope) {
       envelope = { ...envelope, ...body.envelope, agent_id, tenant, updated_at: Date.now() };
       await saveEnvelope(env, envelope);
     }
 
-    const gate = envelopeAllows(envelope, arr, exposure_usd);
-    const policy = quotePolicy(tenant, arr, {
+    const policy = quotePolicy(tenant, assessed.arr, {
       agent_id,
-      exposure_usd: exposure_usd || arr.max_exposure,
+      exposure_usd: exposure_usd || assessed.arr.max_exposure,
     });
 
     let package_id: string | undefined;
@@ -149,9 +144,10 @@ export async function handleRisk(
           evidence: body.evidence,
           data_snapshot: {
             ...(body.data_snapshot || {}),
-            arr_score: arr.arr_score,
-            risk_band: arr.risk_band,
+            arr_score: assessed.arr.arr_score,
+            risk_band: assessed.arr.risk_band,
             exposure_usd,
+            assessment_id: assessed.assessment_id,
           },
           agent_id,
           human_approver: body.human_approver,
@@ -166,7 +162,7 @@ export async function handleRisk(
       }
     }
 
-    if (gate.allowed && exposure_usd > 0) {
+    if (assessed.gate.allowed && exposure_usd > 0) {
       envelope.used_exposure_usd += exposure_usd;
       envelope.used_decisions += 1;
       envelope.updated_at = Date.now();
@@ -177,9 +173,10 @@ export async function handleRisk(
 
     return json({
       ok: true,
-      protocol: "ARR-v0",
-      category: "Decision Risk Exchange",
-      arr,
+      protocol: "ARR-v1",
+      category: "Decision Risk Fabric",
+      assessment_id: assessed.assessment_id,
+      arr: assessed.arr,
       envelope: {
         agent_id: envelope.agent_id,
         max_exposure_usd: envelope.max_exposure_usd,
@@ -187,15 +184,11 @@ export async function handleRisk(
         min_arr_score: envelope.min_arr_score,
         used_decisions: envelope.used_decisions,
       },
-      gate,
+      gate: assessed.gate,
       policy,
       package_id,
       certificate,
-      execution:
-        gate.allowed
-          ? "allowed_within_envelope"
-          : "blocked_or_needs_approval",
-      note: "Simulated underwriting — capital markets integration is a later phase",
+      execution: assessed.gate.allowed ? "allowed_within_envelope" : "blocked_or_needs_approval",
     });
   }
 
@@ -221,31 +214,31 @@ export async function handleRisk(
     const u = new URL(req.url);
     const agent_id = u.searchParams.get("agent_id") || "";
     if (!agent_id) return json({ ok: false, error: "agent_id required" }, 400);
-    const e =
-      (await loadEnvelope(env, identity.tenant || "default", agent_id)) ||
-      defaultEnvelope(agent_id, identity.tenant || "default");
-    return json({ ok: true, envelope: e, persisted: !!(await loadEnvelope(env, identity.tenant || "default", agent_id)) });
+    const persisted = await loadEnvelope(env, identity.tenant || "default", agent_id);
+    const e = persisted || defaultEnvelope(agent_id, identity.tenant || "default");
+    return json({ ok: true, envelope: e, persisted: !!persisted });
+  }
+
+  if ((path === "/v1/risk/envelopes" || path === "/v1/risk/envelope/list") && req.method === "GET") {
+    const items = await listEnvelopes(env, identity.tenant || "default");
+    return json({ ok: true, count: items.length, envelopes: items });
   }
 
   if (path === "/v1/risk/status" && req.method === "GET") {
     return json({
       ok: true,
-      exchange: "Decision Risk Exchange",
-      protocol: "ARR-v0",
-      tagline:
-        "Clearing house for the agent economy — measurable, insured, governable decision risk",
+      fabric: "Aston Risk Fabric",
+      protocol: "ARR-v1",
+      tagline: "Models think. Agents act. Aston decides how much trust they deserve.",
       endpoints: {
         score: "POST /v1/risk/score",
+        assess: "POST /v1/risk/assess",
         underwrite: "POST /v1/risk/underwrite",
         envelope: "POST|GET /v1/risk/envelope",
+        envelopes: "GET /v1/risk/envelopes",
       },
-      products: [
-        "Risk Score API",
-        "Agent Underwriting",
-        "Risk Envelopes",
-        "Quoted Insurance Policy",
-        "ARR Registry (via reputation + envelopes)",
-      ],
+      metric:
+        "% of autonomous decisions that are explainable, reproducible, risk-limited, and reversible",
     });
   }
 
