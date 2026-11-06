@@ -21,6 +21,7 @@ import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
 import { handleTrust } from "./ontology/trust";
 import { handleAccess } from "./access/access";
+import { handleDecisions } from "./decisions/decisions";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -33,7 +34,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.5.0-access-layer";
+const VERSION = "21.6.0-decision-objects";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -322,8 +323,14 @@ export default {
         product: "ASTON OS Defense + Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.5-access-layer",
+        profile: env.DEPLOY_PROFILE ?? "21.6-decision-objects",
         pillars,
+        decision_layer: {
+          decisions: "/v1/decisions",
+          evidence: "/v1/decisions/:id/evidence",
+          approve: "/v1/decisions/:id/approve",
+          outcome: "/v1/decisions/:id/outcome",
+        },
         access_layer: {
           policies: "/v1/access/policies",
           evaluate: "/v1/access/evaluate",
@@ -367,6 +374,9 @@ export default {
           "rbac-abac",
           "row-column-security",
           "purpose-binding",
+          "decision-objects",
+          "decision-evidence",
+          "decision-feedback",
         ],
       });
     }
@@ -381,6 +391,7 @@ export default {
         sovereign: true,
         trust_layer: true,
         access_layer: true,
+        decision_layer: true,
       });
     }
 
@@ -429,6 +440,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const decisions = await handleDecisions(path, req, env, identity, json);
+    if (decisions) return decisions;
 
     const access = await handleAccess(path, req, env, identity, json);
     if (access) return access;

@@ -146,3 +146,46 @@ CREATE TABLE IF NOT EXISTS access_decisions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_access_decisions_tenant ON access_decisions(tenant, created_at DESC);
+
+-- ===== Decision Objects =====
+CREATE TABLE IF NOT EXISTS decisions (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  alternatives TEXT,
+  kpis TEXT,
+  simulation_id TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  owner TEXT,
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_tenant ON decisions(tenant, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS decision_evidence (
+  id TEXT PRIMARY KEY,
+  decision_id TEXT NOT NULL,
+  tenant TEXT NOT NULL,
+  evidence_type TEXT NOT NULL,
+  reference_id TEXT NOT NULL,
+  label TEXT,
+  metadata TEXT,
+  added_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decision_evidence ON decision_evidence(decision_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS decision_feedback (
+  id TEXT PRIMARY KEY,
+  decision_id TEXT NOT NULL,
+  tenant TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  feedback TEXT,
+  score REAL,
+  measured_at INTEGER,
+  actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decision_feedback ON decision_feedback(decision_id, created_at DESC);
