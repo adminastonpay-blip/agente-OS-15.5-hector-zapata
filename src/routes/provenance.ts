@@ -125,7 +125,7 @@ export async function handleProvenance(
       risk_score: Number(body.risk_score) || 0,
       tool: String(body.tool || "reason"),
     });
-    return json({ ok: true, ...result });
+    return json(result);
   }
 
   if (path === "/v1/provenance/status" && req.method === "GET") {
