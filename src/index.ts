@@ -20,6 +20,7 @@ import { handleSovereign } from "./routes/sovereign";
 import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
 import { handleEconomy } from "./routes/economy";
+import { handleInfra } from "./routes/infra";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -32,7 +33,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.4.0-economy";
+const VERSION = "21.4.2-infra";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -293,31 +294,32 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "ASTON OS Agent Economy",
+        product: "ASTON OS Governance Edge",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.4-economy",
+        profile: env.DEPLOY_PROFILE ?? "21.4-infra",
         pillars: pillarStatus(env),
+        infra: "/v1/infra/status",
+        ledger: { write: "/v1/ledger/decision", list: "/v1/ledger/decisions" },
         economy: {
           factory: "/v1/factory/generate",
           run: "/v1/factory/run",
           quote: "/v1/economy/quote",
           reputation_issue: "/v1/reputation/issue",
           certify: "/v1/certify",
-          status: "/v1/economy/status",
         },
         defense: { ingest: "/v1/defense/ingest" },
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
           "chat",
+          "infra-map",
+          "decision-ledger",
           "micro-saas-factory",
           "x402-payments",
           "agent-reputation",
           "code-certify",
           "autodefense",
-          "sovereign-tenant",
-          "post-quantum",
         ],
       });
     }
@@ -327,12 +329,14 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        infra: true,
         agent_economy: true,
         factory: true,
         defense: true,
         x402: true,
         reputation: true,
         certify: true,
+        decision_ledger: true,
       });
     }
 
@@ -368,6 +372,9 @@ export default {
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
       return json({ ok: true, valid: true, account_id: accountId, plan: "free", status: "active", version: VERSION });
     }
+
+    const infra = await handleInfra(path, req, env, identity, json);
+    if (infra) return infra;
 
     const economy = await handleEconomy(path, req, env, identity, json);
     if (economy) return economy;
