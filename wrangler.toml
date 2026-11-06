@@ -45,10 +45,9 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["SessionMemory"]
-
+# SessionMemory already exists on remote with dependent Durable Objects.
+# Do not re-apply new_sqlite_classes to it (fixes error 10074).
+# Other classes kept under a matching tag.
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["AgentNode", "GraphResolver", "MissionBrain", "SafetyInterlock", "SimulationTwin", "Supervisor"]
