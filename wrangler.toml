@@ -45,20 +45,9 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-# Migrations already applied on remote. SessionMemory and other classes exist.
-# Removed re-application of new_sqlite_classes to prevent error 10074.
-# Existing Durable Objects and data are preserved.
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = [
-  "GraphResolver",
-  "Supervisor",
-  "AgentNode",
-  "SimulationTwin",
-  "MissionBrain",
-  "SafetyInterlock",
-]
+# Migrations removed: classes already exist on remote.
+# This prevents error 10074 (cannot re-apply new_sqlite_classes to existing Durable Objects).
+# All existing data and DO instances are preserved.
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
