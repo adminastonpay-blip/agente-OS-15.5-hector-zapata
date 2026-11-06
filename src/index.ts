@@ -23,6 +23,7 @@ import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
+import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -35,7 +36,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.6.0-risk";
+const VERSION = "21.6.1-envelope";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -296,33 +297,27 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "Decision Risk Exchange",
+        product: "Aston Risk Fabric",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.6-risk",
+        profile: env.DEPLOY_PROFILE ?? "21.6-envelope",
         pillars: pillarStatus(env),
         risk: {
-          score: "/v1/risk/score",
+          assess: "/v1/risk/assess",
           underwrite: "/v1/risk/underwrite",
-          envelope: "/v1/risk/envelope",
+          envelopes: "/v1/risk/envelopes",
           status: "/v1/risk/status",
         },
-        provenance: {
-          decide: "/v1/provenance/decide",
-          replay: "/v1/provenance/replay",
-        },
-        tagline:
-          "Clearing house for the agent economy — measurable, insured, governable decision risk",
+        agents: { plans: "/v1/agents/plans" },
+        tagline: "Models think. Agents act. Aston decides how much trust they deserve.",
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
-          "arr-risk-rating",
-          "decision-underwriting",
-          "risk-envelopes",
+          "risk-envelope-v1",
+          "arr-assess",
+          "governed-agents-exposure",
           "decision-provenance",
           "chat",
-          "x402",
-          "autodefense",
         ],
       });
     }
@@ -332,10 +327,10 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
-        decision_risk_exchange: true,
-        arr: true,
+        risk_fabric: true,
+        risk_envelope_v1: true,
+        governed_agents: true,
         decision_provenance: true,
-        agent_economy: true,
       });
     }
 
@@ -374,6 +369,9 @@ export default {
 
     const risk = await handleRisk(path, req, env, identity, json);
     if (risk) return risk;
+
+    const agents = await handleGovernedAgents(path, req, env, identity, json);
+    if (agents) return agents;
 
     const provenance = await handleProvenance(path, req, env, identity, json);
     if (provenance) return provenance;
