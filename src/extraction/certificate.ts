@@ -88,7 +88,9 @@ export async function buildAndSignCertificate(
     signature,
   };
 
-  await env.JOURNAL.put(
+  const journal = env.JOURNAL;
+  if (!journal) throw new Error("R2 JOURNAL binding required to persist certificates");
+  await journal.put(
     `certificates/${opts.tenant}/${certificate_id}.json`,
     JSON.stringify(certificate),
     { httpMetadata: { contentType: "application/json" } }
@@ -108,8 +110,9 @@ export async function buildAndSignCertificate(
     },
   });
 
-  try {
-    await env.DB.prepare(
+  const db = env.DB;
+  if (db) try {
+    await db.prepare(
       `INSERT INTO extraction_certificates
        (id, object_id, tenant, document_id, model, input_hash, certified_count, total_count, actor, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
