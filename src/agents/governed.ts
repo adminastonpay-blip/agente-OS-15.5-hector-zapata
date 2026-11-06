@@ -1,15 +1,13 @@
 import type { Env, Identity } from "../types";
 import { emitLineage } from "../lineage";
 import { evaluateAccess } from "../access/access";
-import { gateAgentExposure, loadEnvelope, defaultEnvelope } from "../risk/envelope";
-
-export type PlanStatus =
-  | "pending_approval"
-  | "approved"
-  | "rejected"
-  | "executing"
-  | "completed"
-  | "failed";
+import {
+  gateAgentExposure,
+  loadEnvelope,
+  consumeExposure,
+  sanitizeExposure,
+} from "../risk/envelope";
+import { defaultEnvelope } from "../risk/arr";
 
 export type GovernedAction = {
   action: string;
@@ -42,43 +40,55 @@ export async function createPlan(
     object_type: "agent_plan",
     purpose: "agent",
   });
+  if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
 
-  if (access.effect === "deny") {
-    throw new Error(`access_denied:${access.reason}`);
-  }
-
-  const agent_id = input.agent_id ?? "default-agent";
-  const totalExposure = input.steps.reduce(
-    (s, st) => s + Number(st.estimated_exposure ?? st.estimated_cost ?? 0),
-    0
-  );
+  const agent_id = String(input.agent_id ?? "default-agent").slice(0, 64);
   const envelope =
     (await loadEnvelope(env, id.tenant, agent_id)) || defaultEnvelope(agent_id, id.tenant);
-  const maxExposure = input.max_exposure ?? envelope.max_exposure_usd;
 
-  // Pre-check: plan total exposure vs envelope
-  let riskGate: { allowed: boolean; reasons: string[]; arr_score?: number } = {
-    allowed: true,
-    reasons: [],
+  // Cap = min(request, envelope) — client cannot raise above envelope
+  const requested = input.max_exposure != null ? sanitizeExposure(input.max_exposure) : envelope.max_exposure_usd;
+  const maxExposure = Math.min(requested, envelope.max_exposure_usd);
+
+  const totalExposure = input.steps.reduce(
+    (s, st) => s + sanitizeExposure(st.estimated_exposure ?? st.estimated_cost ?? 0),
+    0
+  );
+
+  const g = await gateAgentExposure(env, id.tenant, agent_id, totalExposure, {
+    cumulative_exposure: 0,
+  });
+
+  const riskGate = {
+    verdict: g.verdict,
+    allowed: g.allowed,
+    reasons: g.reasons,
+    arr_score: g.arr.arr_score,
   };
-  if (totalExposure > 0) {
-    const g = await gateAgentExposure(env, id.tenant, agent_id, totalExposure);
-    riskGate = {
-      allowed: g.allowed || totalExposure <= maxExposure,
-      reasons: g.reasons,
-      arr_score: g.arr.arr_score,
+
+  // Always pending_approval when require_approval or exposure needs human
+  const status =
+    riskGate.verdict === "deny"
+      ? "rejected"
+      : riskGate.verdict === "require_approval" || totalExposure > maxExposure * 0.5
+        ? "pending_approval"
+        : "pending_approval";
+
+  if (riskGate.verdict === "deny") {
+    return {
+      plan_id: null,
+      status: "rejected",
+      error: "risk_deny",
+      risk_gate: riskGate,
+      max_exposure: maxExposure,
+      total_exposure: totalExposure,
     };
-    if (totalExposure > maxExposure) {
-      riskGate.allowed = false;
-      if (!riskGate.reasons.includes("exposure_cap")) riskGate.reasons.push("exposure_cap");
-    }
   }
 
   const planId = `plan_${crypto.randomUUID()}`;
   const now = Date.now();
   const budgetCalls = Math.max(1, Math.min(input.budget_calls ?? 10, 100));
-  const budgetCost = Math.max(0, input.budget_cost ?? 0);
-  const status = riskGate.allowed ? "pending_approval" : "pending_approval";
+  const budgetCost = Math.max(0, sanitizeExposure(input.budget_cost ?? 0));
 
   await env.DB.prepare(
     `INSERT INTO agent_plans
@@ -89,6 +99,7 @@ export async function createPlan(
     .run();
 
   for (const step of input.steps) {
+    const exp = sanitizeExposure(step.estimated_exposure ?? step.estimated_cost ?? 0);
     await env.DB.prepare(
       `INSERT INTO agent_actions
          (id, plan_id, tenant, action, object_type, target_id, payload, estimated_cost, status, actor, created_at)
@@ -101,11 +112,8 @@ export async function createPlan(
         step.action,
         step.object_type,
         step.target_id ?? null,
-        JSON.stringify({
-          ...(step.payload ?? {}),
-          estimated_exposure: step.estimated_exposure ?? step.estimated_cost ?? 0,
-        }),
-        step.estimated_cost ?? 0,
+        JSON.stringify({ ...(step.payload ?? {}), estimated_exposure: exp }),
+        sanitizeExposure(step.estimated_cost ?? 0),
         id.actor,
         now
       )
@@ -115,7 +123,7 @@ export async function createPlan(
   await emitLineage(env, {
     object_id: planId,
     transformation: "agent.plan.created",
-    pipeline_version: "v1-risk",
+    pipeline_version: "v1.1-risk",
     actor: id.actor,
     metadata: {
       goal: input.goal,
@@ -134,7 +142,7 @@ export async function createPlan(
     max_exposure: maxExposure,
     total_exposure: totalExposure,
     risk_gate: riskGate,
-    requires_human: !riskGate.allowed || totalExposure > maxExposure * 0.5,
+    requires_human: riskGate.verdict === "require_approval" || totalExposure > maxExposure * 0.5,
   };
 }
 
@@ -200,12 +208,12 @@ export async function approvePlan(
   await emitLineage(env, {
     object_id: planId,
     transformation: input.approve ? "agent.plan.approved" : "agent.plan.rejected",
-    pipeline_version: "v1-risk",
+    pipeline_version: "v1.1-risk",
     actor: id.actor,
-    metadata: { reason: input.reason ?? null },
+    metadata: { reason: input.reason ?? null, human_approved: input.approve },
   });
 
-  return { plan_id: planId, status };
+  return { plan_id: planId, status, human_approved: input.approve };
 }
 
 export async function executePlan(env: Env, id: Identity, planId: string) {
@@ -222,6 +230,8 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
   });
   if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
 
+  const humanApproved = true; // status approved implies human (or auto-approved path)
+
   await env.DB.prepare(
     `UPDATE agent_plans SET status = 'executing', updated_at = ? WHERE tenant = ? AND id = ?`
   )
@@ -236,7 +246,7 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
 
   let usedCalls = plan.used_calls ?? 0;
   let usedCost = plan.used_cost ?? 0;
-  let usedExposure = 0;
+  let cumulativeExposure = 0;
   let failed = false;
   let failureReason = "";
   const riskBlocks: string[] = [];
@@ -248,7 +258,7 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
       break;
     }
 
-    const estimatedCost = Number(action.estimated_cost ?? 0);
+    const estimatedCost = sanitizeExposure(action.estimated_cost ?? 0);
     if (plan.budget_cost > 0 && usedCost + estimatedCost > plan.budget_cost) {
       failed = true;
       failureReason = "budget_cost_exhausted";
@@ -261,30 +271,37 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     } catch {
       payload = {};
     }
-    const stepExposure = Number(payload.estimated_exposure ?? estimatedCost ?? 0);
+    const stepExposure = sanitizeExposure(payload.estimated_exposure ?? estimatedCost);
 
-    if (stepExposure > 0) {
-      const g = await gateAgentExposure(
-        env,
-        id.tenant,
-        plan.agent_id || "default-agent",
-        stepExposure
-      );
-      if (!g.allowed) {
-        await env.DB.prepare(
-          `UPDATE agent_actions SET status = 'blocked', result = ?, executed_at = ? WHERE id = ?`
+    // Gate on cumulative plan exposure + envelope
+    const g = await gateAgentExposure(
+      env,
+      id.tenant,
+      plan.agent_id || "default-agent",
+      stepExposure,
+      { humanApproved, cumulative_exposure: cumulativeExposure }
+    );
+
+    if (g.verdict === "deny" || (g.verdict === "require_approval" && !humanApproved)) {
+      await env.DB.prepare(
+        `UPDATE agent_actions SET status = 'blocked', result = ?, executed_at = ? WHERE id = ?`
+      )
+        .bind(
+          JSON.stringify({
+            risk_blocked: true,
+            verdict: g.verdict,
+            reasons: g.reasons,
+            arr_score: g.arr.arr_score,
+            cumulative_before: cumulativeExposure,
+          }),
+          Date.now(),
+          action.id
         )
-          .bind(
-            JSON.stringify({ risk_blocked: true, reasons: g.reasons, arr_score: g.arr.arr_score }),
-            Date.now(),
-            action.id
-          )
-          .run();
-        riskBlocks.push(action.id);
-        failed = true;
-        failureReason = `risk_envelope:${g.reasons.join(",")}`;
-        break;
-      }
+        .run();
+      riskBlocks.push(action.id);
+      failed = true;
+      failureReason = `risk_${g.verdict}:${g.reasons.join(",")}`;
+      break;
     }
 
     const accessAction =
@@ -321,6 +338,8 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
       target_id: action.target_id ?? null,
       access_decision_id: actionAccess.decision_id,
       exposure: stepExposure,
+      cumulative_exposure: cumulativeExposure + stepExposure,
+      risk_verdict: g.verdict,
     };
 
     await env.DB.prepare(
@@ -331,15 +350,24 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
 
     usedCalls += 1;
     usedCost += estimatedCost;
-    usedExposure += stepExposure;
+    cumulativeExposure += stepExposure;
+
+    // Persist envelope consumption so split-step evasion fails across plans too
+    if (stepExposure > 0) {
+      await consumeExposure(env, id.tenant, plan.agent_id || "default-agent", stepExposure);
+    }
 
     await emitLineage(env, {
       object_id: planId,
       parent_ids: action.target_id ? [action.target_id] : [],
       transformation: "agent.action.executed",
-      pipeline_version: "v1-risk",
+      pipeline_version: "v1.1-risk",
       actor: id.actor,
-      metadata: { action_id: action.id, action: action.action, exposure: stepExposure },
+      metadata: {
+        action_id: action.id,
+        exposure: stepExposure,
+        cumulative_exposure: cumulativeExposure,
+      },
     });
   }
 
@@ -355,7 +383,7 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     status: finalStatus,
     used_calls: usedCalls,
     used_cost: usedCost,
-    used_exposure: usedExposure,
+    used_exposure: cumulativeExposure,
     risk_blocks: riskBlocks.length ? riskBlocks : undefined,
     failure_reason: failureReason || null,
   };
@@ -371,7 +399,11 @@ export async function handleGovernedAgents(
   if (path === "/v1/agents/plans" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     try {
-      return json({ ok: true, ...(await createPlan(env, identity, body)) });
+      const result = await createPlan(env, identity, body);
+      if ((result as any).error === "risk_deny") {
+        return json({ ok: false, ...result }, 403);
+      }
+      return json({ ok: true, ...result });
     } catch (e: any) {
       return json({ ok: false, error: String(e?.message || e) }, 400);
     }
