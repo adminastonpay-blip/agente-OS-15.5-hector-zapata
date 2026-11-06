@@ -1,26 +1,22 @@
 name = "agente-os-15-5-hector-zapata"
 main = "src/index.ts"
 compatibility_date = "2026-11-03"
-# nodejs_compat + post-quantum WebCrypto (ML-KEM / ML-DSA)
-compatibility_flags = ["nodejs_compat", "webcrypto_modern_algorithms"]
+compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
 workers_dev = true
 
 [ai]
 binding = "AI"
 
-# ---- D1 (already on this account) ----
 [[d1_databases]]
 binding = "DB"
 database_name = "sos-db"
 database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 
-# ---- Queue (already on this account) ----
 [[queues.producers]]
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
-# ---- Durable Objects (must match production bindings) ----
 [[durable_objects.bindings]]
 name = "SESSION"
 class_name = "SessionMemory"
@@ -49,7 +45,7 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-# Migration history — DO NOT edit tags or re-list SessionMemory
+# Migration history — do not reorder or re-list SessionMemory under a new tag
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionMemory"]
@@ -69,4 +65,4 @@ new_sqlite_classes = [
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
-DEPLOY_PROFILE = "21.1-sovereign"
+DEPLOY_PROFILE = "21.4-stable"

@@ -36,11 +36,17 @@ export async function createObject(
     metadata: { type_id: o.type_id },
   });
 
-  const stub = env.GRAPH.get(env.GRAPH.idFromName(id.tenant));
-  await stub.fetch("https://do/object", {
-    method: "POST",
-    body: JSON.stringify({ id: oid, type_id: o.type_id, properties: o.properties }),
-  });
+  if (env.GRAPH) {
+    try {
+      const stub = env.GRAPH.get(env.GRAPH.idFromName(id.tenant));
+      await stub.fetch("https://do/object", {
+        method: "POST",
+        body: JSON.stringify({ id: oid, type_id: o.type_id, properties: o.properties }),
+      });
+    } catch {
+      /* graph sync best-effort */
+    }
+  }
   return oid;
 }
 
@@ -113,11 +119,17 @@ export async function createLink(
     metadata: { type: l.type },
   });
 
-  const stub = env.GRAPH.get(env.GRAPH.idFromName(id.tenant));
-  await stub.fetch("https://do/link", {
-    method: "POST",
-    body: JSON.stringify({ id: lid, from_id: l.from_id, to_id: l.to_id, type: l.type }),
-  });
+  if (env.GRAPH) {
+    try {
+      const stub = env.GRAPH.get(env.GRAPH.idFromName(id.tenant));
+      await stub.fetch("https://do/link", {
+        method: "POST",
+        body: JSON.stringify({ id: lid, from_id: l.from_id, to_id: l.to_id, type: l.type }),
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
   return lid;
 }
 
@@ -138,7 +150,6 @@ export async function findObjectsByProperty(
   return rows.results;
 }
 
-/** Impacto en cascada vía D1 (sin paquete pg / Hyperdrive). */
 export async function cascadeImpact(
   env: Env,
   tenant: string,
