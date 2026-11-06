@@ -5,18 +5,22 @@ compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
 workers_dev = true
 
+# AI binding (used by the code)
 [ai]
 binding = "AI"
 
+# D1 used by the application
 [[d1_databases]]
 binding = "DB"
 database_name = "sos-db"
 database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 
+# Queue producer used by the code
 [[queues.producers]]
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
+# Durable Object bindings (code references these)
 [[durable_objects.bindings]]
 name = "SESSION"
 class_name = "SessionMemory"
@@ -45,9 +49,36 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-# Migrations removed: classes already exist on remote.
-# This prevents error 10074 (cannot re-apply new_sqlite_classes to existing Durable Objects).
-# All existing data and DO instances are preserved.
+# Modern declarative exports (recommended by Cloudflare instead of legacy migrations).
+# These classes already exist on the remote as SQLite-backed Durable Objects.
+# Declaring them this way avoids re-applying new_sqlite_classes and the 10074 error.
+[exports.SessionMemory]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.GraphResolver]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.Supervisor]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.AgentNode]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.SimulationTwin]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.MissionBrain]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
