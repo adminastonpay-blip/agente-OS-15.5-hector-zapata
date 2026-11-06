@@ -111,3 +111,38 @@ CREATE TABLE IF NOT EXISTS quarantine_objects (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_quarantine_tenant ON quarantine_objects(tenant, created_at DESC);
+
+-- ===== Access Layer: Policies =====
+CREATE TABLE IF NOT EXISTS access_policies (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT '*',
+  object_type TEXT NOT NULL DEFAULT '*',
+  action TEXT NOT NULL DEFAULT 'read',
+  purpose TEXT NOT NULL DEFAULT '*',
+  clearance TEXT NOT NULL DEFAULT '*',
+  effect TEXT NOT NULL DEFAULT 'allow',
+  row_filter TEXT,
+  restricted_fields TEXT,
+  priority INTEGER NOT NULL DEFAULT 100,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_access_policies_tenant ON access_policies(tenant, role, object_type, action);
+
+-- ===== Access Layer: Decision Audit =====
+CREATE TABLE IF NOT EXISTS access_decisions (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  object_type TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  effect TEXT NOT NULL,
+  policy_id TEXT,
+  reason TEXT,
+  resource_id TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_access_decisions_tenant ON access_decisions(tenant, created_at DESC);

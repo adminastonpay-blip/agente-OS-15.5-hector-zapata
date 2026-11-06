@@ -20,6 +20,7 @@ import { handleSovereign } from "./routes/sovereign";
 import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
 import { handleTrust } from "./ontology/trust";
+import { handleAccess } from "./access/access";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -32,7 +33,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.4.0-trust-layer";
+const VERSION = "21.5.0-access-layer";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -321,8 +322,13 @@ export default {
         product: "ASTON OS Defense + Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.4-trust-layer",
+        profile: env.DEPLOY_PROFILE ?? "21.5-access-layer",
         pillars,
+        access_layer: {
+          policies: "/v1/access/policies",
+          evaluate: "/v1/access/evaluate",
+          secure_objects: "/v1/ontology/objects/secure",
+        },
         trust_layer: {
           schema_registry: "/v1/ontology/schema",
           validated_objects: "/v1/ontology/objects/validated",
@@ -358,6 +364,9 @@ export default {
           "schema-registry",
           "quality-gates",
           "quarantine",
+          "rbac-abac",
+          "row-column-security",
+          "purpose-binding",
         ],
       });
     }
@@ -371,6 +380,7 @@ export default {
         factory: true,
         sovereign: true,
         trust_layer: true,
+        access_layer: true,
       });
     }
 
@@ -419,6 +429,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const access = await handleAccess(path, req, env, identity, json);
+    if (access) return access;
 
     const trust = await handleTrust(path, req, env, identity, json);
     if (trust) return trust;
