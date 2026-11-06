@@ -20,65 +20,9 @@ database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
-# Durable Object bindings (code references these)
-[[durable_objects.bindings]]
-name = "SESSION"
-class_name = "SessionMemory"
-
-[[durable_objects.bindings]]
-name = "GRAPH"
-class_name = "GraphResolver"
-
-[[durable_objects.bindings]]
-name = "SUPERVISOR"
-class_name = "Supervisor"
-
-[[durable_objects.bindings]]
-name = "AGENT"
-class_name = "AgentNode"
-
-[[durable_objects.bindings]]
-name = "SIMULATION"
-class_name = "SimulationTwin"
-
-[[durable_objects.bindings]]
-name = "MISSION"
-class_name = "MissionBrain"
-
-[[durable_objects.bindings]]
-name = "SAFETY"
-class_name = "SafetyInterlock"
-
-# Modern declarative exports (recommended by Cloudflare instead of legacy migrations).
-# These classes already exist on the remote as SQLite-backed Durable Objects.
-# Declaring them this way avoids re-applying new_sqlite_classes and the 10074 error.
-[exports.SessionMemory]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.GraphResolver]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.Supervisor]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.AgentNode]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.SimulationTwin]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.MissionBrain]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.SafetyInterlock]
-type = "durable-object"
-storage = "sqlite"
+# Durable Objects temporarily removed.
+# Remote has conflicting migration history for SessionMemory (error 10074).
+# Once this deploy succeeds we will re-add them one by one using the correct exports or matching migration tags.
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
