@@ -24,7 +24,7 @@ export function modelsFor(env: Env, profile: RouteProfile = "chat_fast"): string
   const preferred = profile.startsWith("chat")
     ? env.CHAT_MODEL
     : env.EMBED_MODEL;
-  const list = [...ROUTES[profile]];
+  const list: string[] = [...ROUTES[profile]];
   if (preferred && !list.includes(preferred as any)) list.unshift(preferred);
   return [...new Set(list)];
 }
