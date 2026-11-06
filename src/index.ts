@@ -22,6 +22,7 @@ import { handleDefense } from "./routes/defense";
 import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleProvenance } from "./routes/provenance";
+import { handleRisk } from "./routes/risk";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -34,7 +35,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.5.0-provenance";
+const VERSION = "21.6.0-risk";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -295,30 +296,31 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "Sovereign Decision OS",
+        product: "Decision Risk Exchange",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.5-provenance",
+        profile: env.DEPLOY_PROFILE ?? "21.6-risk",
         pillars: pillarStatus(env),
+        risk: {
+          score: "/v1/risk/score",
+          underwrite: "/v1/risk/underwrite",
+          envelope: "/v1/risk/envelope",
+          status: "/v1/risk/status",
+        },
         provenance: {
           decide: "/v1/provenance/decide",
           replay: "/v1/provenance/replay",
-          certificate: "/v1/provenance/certificate",
-          constitution: "/v1/constitution",
-          status: "/v1/provenance/status",
         },
         tagline:
-          "Trust kernel for the agent economy — decisions as auditable as human ones",
+          "Clearing house for the agent economy — measurable, insured, governable decision risk",
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
+          "arr-risk-rating",
+          "decision-underwriting",
+          "risk-envelopes",
           "decision-provenance",
-          "decision-replay",
-          "decision-certificates",
-          "agent-constitution",
           "chat",
-          "infra-map",
-          "micro-saas-factory",
           "x402",
           "autodefense",
         ],
@@ -330,11 +332,9 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        decision_risk_exchange: true,
+        arr: true,
         decision_provenance: true,
-        decision_replay: true,
-        certificates: true,
-        constitutions: true,
-        infra: true,
         agent_economy: true,
       });
     }
@@ -371,6 +371,9 @@ export default {
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
       return json({ ok: true, valid: true, account_id: accountId, plan: "free", status: "active", version: VERSION });
     }
+
+    const risk = await handleRisk(path, req, env, identity, json);
+    if (risk) return risk;
 
     const provenance = await handleProvenance(path, req, env, identity, json);
     if (provenance) return provenance;
