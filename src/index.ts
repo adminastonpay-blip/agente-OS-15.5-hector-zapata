@@ -19,6 +19,7 @@ import { handleV21, pillarStatus } from "./routes/v21";
 import { handleSovereign } from "./routes/sovereign";
 import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
+import { handleTrust } from "./ontology/trust";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -31,7 +32,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.3.0-defense";
+const VERSION = "21.4.0-trust-layer";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -230,10 +231,7 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
       },
     });
   } catch (e: any) {
-    return json(
-      { ok: false, error: "stream unavailable", detail: String(e?.message || e).slice(0, 250) },
-      502
-    );
+    return json({ ok: false, error: "stream unavailable", detail: String(e?.message || e).slice(0, 250) }, 502);
   }
 }
 
@@ -323,8 +321,13 @@ export default {
         product: "ASTON OS Defense + Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.3-defense",
+        profile: env.DEPLOY_PROFILE ?? "21.4-trust-layer",
         pillars,
+        trust_layer: {
+          schema_registry: "/v1/ontology/schema",
+          validated_objects: "/v1/ontology/objects/validated",
+          quarantine: "/v1/ontology/quarantine",
+        },
         defense: {
           ingest: "/v1/defense/ingest",
           triage: "/v1/defense/triage",
@@ -352,6 +355,9 @@ export default {
           "simulation",
           "tts",
           "voice",
+          "schema-registry",
+          "quality-gates",
+          "quarantine",
         ],
       });
     }
@@ -364,6 +370,7 @@ export default {
         defense: true,
         factory: true,
         sovereign: true,
+        trust_layer: true,
       });
     }
 
@@ -412,6 +419,9 @@ export default {
         version: VERSION,
       });
     }
+
+    const trust = await handleTrust(path, req, env, identity, json);
+    if (trust) return trust;
 
     const defense = await handleDefense(path, req, env, identity, json);
     if (defense) return defense;

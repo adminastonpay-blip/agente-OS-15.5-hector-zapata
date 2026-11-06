@@ -68,3 +68,46 @@ CREATE TABLE IF NOT EXISTS extraction_certificates (
 );
 CREATE INDEX IF NOT EXISTS idx_ext_cert_tenant ON extraction_certificates(tenant, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ext_cert_hash ON extraction_certificates(input_hash);
+
+-- ===== Trust Layer: Schema Registry =====
+CREATE TABLE IF NOT EXISTS object_type_versions (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  type_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  json_schema TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(tenant, type_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_otv_active ON object_type_versions(tenant, type_id, status);
+
+-- ===== Trust Layer: Data Contracts =====
+CREATE TABLE IF NOT EXISTS data_contracts (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  source TEXT NOT NULL,
+  type_id TEXT NOT NULL,
+  owner TEXT,
+  frequency TEXT,
+  freshness_sla_ms INTEGER,
+  quality_rules TEXT,
+  failure_action TEXT NOT NULL DEFAULT 'quarantine',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contracts_tenant ON data_contracts(tenant, source);
+
+-- ===== Trust Layer: Quarantine =====
+CREATE TABLE IF NOT EXISTS quarantine_objects (
+  id TEXT PRIMARY KEY,
+  tenant TEXT NOT NULL,
+  type_id TEXT NOT NULL,
+  properties TEXT NOT NULL,
+  errors TEXT NOT NULL,
+  quality_score REAL NOT NULL DEFAULT 0,
+  source TEXT,
+  actor TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_quarantine_tenant ON quarantine_objects(tenant, created_at DESC);

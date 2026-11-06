@@ -1,5 +1,6 @@
 import type { Env, Identity } from "./types";
 import { emitLineage } from "./lineage";
+import { getActiveSchema, validateProperties, quarantineObject } from "./ontology/trust";
 
 export async function createObjectType(env: Env, t: { name: string; schema: unknown }) {
   if (!env.DB) throw new Error("DB binding required");
@@ -41,6 +42,51 @@ export async function createObject(
     body: JSON.stringify({ id: oid, type_id: o.type_id, properties: o.properties }),
   });
   return oid;
+}
+
+export async function createValidatedObject(
+  env: Env,
+  id: Identity,
+  o: {
+    type_id: string;
+    properties: Record<string, unknown>;
+    source?: string;
+  }
+) {
+  if (!env.DB) throw new Error("DB binding required");
+
+  const schema = await getActiveSchema(env, id.tenant, o.type_id);
+  if (!schema) {
+    throw new Error(`no active schema for type ${o.type_id}`);
+  }
+
+  const validation = validateProperties(schema.json_schema, o.properties ?? {});
+
+  if (!validation.ok) {
+    const quarantineId = await quarantineObject(
+      env,
+      id,
+      o,
+      validation.errors,
+      validation.quality_score
+    );
+
+    return {
+      created: false,
+      quarantined: true,
+      quarantine_id: quarantineId,
+      errors: validation.errors,
+      quality_score: validation.quality_score,
+    };
+  }
+
+  const objectId = await createObject(env, id, o);
+
+  return {
+    created: true,
+    object_id: objectId,
+    quality_score: validation.quality_score,
+  };
 }
 
 export async function createLink(
