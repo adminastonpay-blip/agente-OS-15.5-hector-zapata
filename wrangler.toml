@@ -45,9 +45,9 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["SessionMemory"]
+# Migrations already applied on remote. SessionMemory and other classes exist.
+# Removed re-application of new_sqlite_classes to prevent error 10074.
+# Existing Durable Objects and data are preserved.
 
 [[migrations]]
 tag = "v2"
