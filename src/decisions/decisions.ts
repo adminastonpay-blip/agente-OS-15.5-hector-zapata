@@ -72,7 +72,9 @@ export async function createDecision(
 }
 
 async function getDecision(env: Env, tenant: string, decisionId: string) {
-  const row = await env.DB.prepare(
+  const db = env.DB;
+  if (!db) throw new Error("DB binding required");
+  const row = await db.prepare(
     `SELECT * FROM decisions WHERE tenant = ? AND id = ?`
   )
     .bind(tenant, decisionId)
