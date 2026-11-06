@@ -6,6 +6,15 @@ import {
   runRecipe,
   simulateDeploy,
 } from "../factory/micro-saas";
+import { quoteToolRun, paymentSatisfied, paymentRequiredResponse, logPayment } from "../economy/x402";
+import { certifyArtifact } from "../economy/certify";
+
+const CORS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Payment,X-402-Payment,X-Aston-Free",
+};
 
 export async function handleFactory(
   path: string,
@@ -14,7 +23,6 @@ export async function handleFactory(
   identity: Identity,
   json: (d: unknown, s?: number) => Response
 ): Promise<Response | null> {
-  // POST /v1/factory/generate  { problem | description | message }
   if (path === "/v1/factory/generate" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const problem =
@@ -28,6 +36,14 @@ export async function handleFactory(
     try {
       const tool = await generateMicroTool(env, identity, problem);
       const sim = await simulateDeploy(env, identity, tool);
+      let certificate = null;
+      if (body.certify !== false) {
+        certificate = await certifyArtifact(env, identity, {
+          code: tool.code_preview,
+          recipe: tool.recipe,
+          tool_id: tool.id,
+        });
+      }
       return json({
         ok: true,
         tool: {
@@ -41,12 +57,14 @@ export async function handleFactory(
           code_preview: tool.code_preview.slice(0, 2000),
         },
         simulation: sim,
+        certificate,
         endpoints: {
           run: "/v1/factory/run",
+          quote: "/v1/economy/quote",
+          certify: "/v1/certify",
           get: `/v1/factory/tools/${tool.id}`,
-          list: "/v1/factory/tools",
         },
-        note: "Wedge activo: recipe allowlisted. Dynamic Worker + Wallet = siguiente capa en dashboard.",
+        note: "Factory + auto-certify. Pay on /run via x402 headers or X-Aston-Free: 1",
       });
     } catch (e: any) {
       return json(
@@ -56,7 +74,6 @@ export async function handleFactory(
     }
   }
 
-  // GET /v1/factory/tools
   if (path === "/v1/factory/tools" && req.method === "GET") {
     const tools = await listTools(env, identity);
     return json({
@@ -73,7 +90,6 @@ export async function handleFactory(
     });
   }
 
-  // GET /v1/factory/tools/:id
   const m = path.match(/^\/v1\/factory\/tools\/([^/]+)$/);
   if (m && req.method === "GET") {
     const tool = await getTool(env, identity, m[1]);
@@ -81,13 +97,20 @@ export async function handleFactory(
     return json({ ok: true, tool });
   }
 
-  // POST /v1/factory/run  { tool_id, input }
   if (path === "/v1/factory/run" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const toolId = String(body.tool_id || body.id || "");
     if (!toolId) return json({ ok: false, error: "tool_id required" }, 400);
     const tool = await getTool(env, identity, toolId);
     if (!tool) return json({ ok: false, error: "tool not found" }, 404);
+
+    const requirePay = body.require_payment === true || req.headers.get("X-Require-Payment") === "1";
+    const pay = paymentSatisfied(req, env);
+    if (requirePay && !pay.paid) {
+      const quote = quoteToolRun(tool.id, tool.wallet_hint);
+      return paymentRequiredResponse(quote, CORS);
+    }
+
     const input =
       body.input && typeof body.input === "object" && !Array.isArray(body.input)
         ? body.input
@@ -95,6 +118,14 @@ export async function handleFactory(
 
     const result = await runRecipe(env, tool, input);
     if (!result.ok) return json({ ok: false, error: result.error }, 400);
+
+    await logPayment(env, identity, {
+      type: "tool_run",
+      tool_id: tool.id,
+      method: pay.method,
+      wallet: tool.wallet_hint,
+    });
+
     return json({
       ok: true,
       tool_id: tool.id,
@@ -102,12 +133,13 @@ export async function handleFactory(
       steps: result.steps,
       economy: {
         wallet_hint: tool.wallet_hint,
-        metering: "placeholder — Cloudflare Wallets later",
+        payment_method: pay.method,
+        protocol: "x402-compatible",
+        metering: pay.method === "none" ? "free_discovery" : pay.method,
       },
     });
   }
 
-  // POST /v1/factory/simulate  { tool_id }
   if (path === "/v1/factory/simulate" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const toolId = String(body.tool_id || body.id || "");

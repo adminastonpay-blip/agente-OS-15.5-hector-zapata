@@ -19,10 +19,7 @@ import { handleV21, pillarStatus } from "./routes/v21";
 import { handleSovereign } from "./routes/sovereign";
 import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
-import { handleTrust } from "./ontology/trust";
-import { handleAccess } from "./access/access";
-import { handleDecisions } from "./decisions/decisions";
-import { handleGovernedAgents } from "./agents/governed";
+import { handleEconomy } from "./routes/economy";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -35,13 +32,13 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.7.0-governed-agents";
+const VERSION = "21.4.0-economy";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Sensor-Key",
+    "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Sensor-Key,X-Payment,X-402-Payment,X-Aston-Free,X-Require-Payment",
 };
 
 const json = (d: unknown, s = 200) =>
@@ -102,28 +99,22 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
           ? body.prompt.trim()
           : "";
     if (!message) return json({ ok: false, error: "message requerido" }, 400);
-
     const session_id =
       typeof body.session_id === "string" && body.session_id
         ? body.session_id.slice(0, 80)
         : "default";
-
     const useDeep = deep || body.mode === "deep" || body.deep === true;
     const { stub, history } = await loadHistory(env, session_id, body);
-
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
       ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
       { role: "user", content: message },
     ];
-
     const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
     const answer = out.response || "";
     await appendHistory(stub, message, answer);
-
     const actions =
       body.agent?.actions_enabled || body.client?.agent_runtime ? inferActions(message) : [];
-
     return json({
       ok: true,
       answer,
@@ -136,15 +127,8 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
       actions: actions.length ? actions : undefined,
     });
   } catch (e: any) {
-    const detail = String(e?.message || e).slice(0, 300);
-    console.error("[CHAT_ERROR]", detail);
     return json(
-      {
-        ok: false,
-        error: "AI service unavailable",
-        detail,
-        hint: "Check Workers AI binding and CHAT_MODEL",
-      },
+      { ok: false, error: "AI service unavailable", detail: String(e?.message || e).slice(0, 300) },
       502
     );
   }
@@ -160,29 +144,23 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
           ? body.prompt.trim()
           : "";
     if (!message) return json({ ok: false, error: "message requerido" }, 400);
-
     const session_id =
       typeof body.session_id === "string" && body.session_id
         ? body.session_id.slice(0, 80)
         : "default";
-
     const useDeep = body.mode === "deep" || body.deep === true;
     const { stub, history } = await loadHistory(env, session_id, body);
-
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
       ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
       { role: "user", content: message },
     ];
-
     const { stream, model, mode } = await chatStream(env, messages, {
       max_tokens: useDeep ? 1024 : 512,
     });
-
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     let full = "";
-
     const sse = new ReadableStream({
       async start(controller) {
         const send = (event: string, data: unknown) => {
@@ -191,7 +169,6 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
           );
         };
         send("meta", { ok: true, model, stream_mode: mode, session_id, version: VERSION });
-
         try {
           const reader = stream.getReader();
           while (true) {
@@ -221,7 +198,6 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
         }
       },
     });
-
     return new Response(sse, {
       status: 200,
       headers: {
@@ -229,8 +205,6 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        "X-ASTON-Stream": mode,
-        "X-ASTON-Model": model,
       },
     });
   } catch (e: any) {
@@ -246,7 +220,6 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
       (typeof body.message === "string" && body.message.trim()) ||
       "";
     if (!text) return json({ ok: false, error: "text requerido" }, 400);
-    if (text.length > 5000) return json({ ok: false, error: "text demasiado largo" }, 413);
     const lang = (typeof body.language === "string" ? body.language : "es").toLowerCase();
     const preferred =
       typeof body.model === "string" && body.model.startsWith("@cf/")
@@ -317,75 +290,34 @@ export default {
     }
 
     if (path === "/" || path === "/health") {
-      const pillars = pillarStatus(env);
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "ASTON OS Defense + Agent Economy",
+        product: "ASTON OS Agent Economy",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.7-governed-agents",
-        pillars,
-        governed_agents: {
-          plans: "/v1/agents/plans",
-          approve: "/v1/agents/plans/:id/approve",
-          execute: "/v1/agents/plans/:id/execute",
-        },
-        decision_layer: {
-          decisions: "/v1/decisions",
-          evidence: "/v1/decisions/:id/evidence",
-          approve: "/v1/decisions/:id/approve",
-          outcome: "/v1/decisions/:id/outcome",
-        },
-        access_layer: {
-          policies: "/v1/access/policies",
-          evaluate: "/v1/access/evaluate",
-          secure_objects: "/v1/ontology/objects/secure",
-        },
-        trust_layer: {
-          schema_registry: "/v1/ontology/schema",
-          validated_objects: "/v1/ontology/objects/validated",
-          quarantine: "/v1/ontology/quarantine",
-        },
-        defense: {
-          ingest: "/v1/defense/ingest",
-          triage: "/v1/defense/triage",
-          investigate: "/v1/defense/investigate",
-          incidents: "/v1/defense/incidents",
-          approve: "/v1/defense/approve",
-          status: "/v1/defense/status",
-        },
-        factory: {
-          generate: "/v1/factory/generate",
+        profile: env.DEPLOY_PROFILE ?? "21.4-economy",
+        pillars: pillarStatus(env),
+        economy: {
+          factory: "/v1/factory/generate",
           run: "/v1/factory/run",
-          tools: "/v1/factory/tools",
+          quote: "/v1/economy/quote",
+          reputation_issue: "/v1/reputation/issue",
+          certify: "/v1/certify",
+          status: "/v1/economy/status",
         },
-        routes: ["/health", "/v1/chat", "/v1/chat/stream", "/v1/defense/ingest", "/v1/factory/generate"],
+        defense: { ingest: "/v1/defense/ingest" },
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
           "chat",
-          "autodefense",
           "micro-saas-factory",
+          "x402-payments",
+          "agent-reputation",
+          "code-certify",
+          "autodefense",
           "sovereign-tenant",
           "post-quantum",
-          "safety-interlock",
-          "swarm",
-          "simulation",
-          "tts",
-          "voice",
-          "schema-registry",
-          "quality-gates",
-          "quarantine",
-          "rbac-abac",
-          "row-column-security",
-          "purpose-binding",
-          "decision-objects",
-          "decision-evidence",
-          "decision-feedback",
-          "governed-agent-plans",
-          "agent-budgets",
-          "plan-approve-execute",
         ],
       });
     }
@@ -395,13 +327,12 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
-        defense: true,
+        agent_economy: true,
         factory: true,
-        sovereign: true,
-        trust_layer: true,
-        access_layer: true,
-        decision_layer: true,
-        governed_agents: true,
+        defense: true,
+        x402: true,
+        reputation: true,
+        certify: true,
       });
     }
 
@@ -426,12 +357,7 @@ export default {
     if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env);
     if (path === "/v1/voice" && req.method === "POST") return handleVoice(req, env);
     if (path === "/v1/voice/profiles" && req.method === "GET") {
-      return json({
-        ok: true,
-        default: "aston_executive",
-        profiles: Object.values(VOICE_PROFILES),
-        version: VERSION,
-      });
+      return json({ ok: true, default: "aston_executive", profiles: Object.values(VOICE_PROFILES), version: VERSION });
     }
     if (path === "/v1/validate" && req.method === "POST") {
       const body = await req.json<any>().catch(() => ({}));
@@ -440,28 +366,11 @@ export default {
         (typeof body.id === "string" && body.id.trim()) ||
         "";
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
-      return json({
-        ok: true,
-        valid: true,
-        account_id: accountId,
-        plan: "free",
-        status: "active",
-        source: "edge_default",
-        version: VERSION,
-      });
+      return json({ ok: true, valid: true, account_id: accountId, plan: "free", status: "active", version: VERSION });
     }
 
-    const governed = await handleGovernedAgents(path, req, env, identity, json);
-    if (governed) return governed;
-
-    const decisions = await handleDecisions(path, req, env, identity, json);
-    if (decisions) return decisions;
-
-    const access = await handleAccess(path, req, env, identity, json);
-    if (access) return access;
-
-    const trust = await handleTrust(path, req, env, identity, json);
-    if (trust) return trust;
+    const economy = await handleEconomy(path, req, env, identity, json);
+    if (economy) return economy;
 
     const defense = await handleDefense(path, req, env, identity, json);
     if (defense) return defense;
