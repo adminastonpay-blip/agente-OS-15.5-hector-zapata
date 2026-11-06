@@ -51,10 +51,11 @@ export async function generateAgentIdentity() {
   // Classical fallback for environments without PQC
   let ecdsa: CryptoKeyPair | null = null;
   if (!signingKeys) {
-    ecdsa = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
-      "sign",
-      "verify",
-    ]);
+    ecdsa = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
   }
 
   return {
