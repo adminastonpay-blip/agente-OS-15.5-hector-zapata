@@ -21,6 +21,7 @@ import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
 import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
+import { handleProvenance } from "./routes/provenance";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
 export {
@@ -33,7 +34,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.4.2-infra";
+const VERSION = "21.5.0-provenance";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -294,31 +295,31 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "ASTON OS Governance Edge",
+        product: "Sovereign Decision OS",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.4-infra",
+        profile: env.DEPLOY_PROFILE ?? "21.5-provenance",
         pillars: pillarStatus(env),
-        infra: "/v1/infra/status",
-        ledger: { write: "/v1/ledger/decision", list: "/v1/ledger/decisions" },
-        economy: {
-          factory: "/v1/factory/generate",
-          run: "/v1/factory/run",
-          quote: "/v1/economy/quote",
-          reputation_issue: "/v1/reputation/issue",
-          certify: "/v1/certify",
+        provenance: {
+          decide: "/v1/provenance/decide",
+          replay: "/v1/provenance/replay",
+          certificate: "/v1/provenance/certificate",
+          constitution: "/v1/constitution",
+          status: "/v1/provenance/status",
         },
-        defense: { ingest: "/v1/defense/ingest" },
+        tagline:
+          "Trust kernel for the agent economy — decisions as auditable as human ones",
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
+          "decision-provenance",
+          "decision-replay",
+          "decision-certificates",
+          "agent-constitution",
           "chat",
           "infra-map",
-          "decision-ledger",
           "micro-saas-factory",
-          "x402-payments",
-          "agent-reputation",
-          "code-certify",
+          "x402",
           "autodefense",
         ],
       });
@@ -329,14 +330,12 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        decision_provenance: true,
+        decision_replay: true,
+        certificates: true,
+        constitutions: true,
         infra: true,
         agent_economy: true,
-        factory: true,
-        defense: true,
-        x402: true,
-        reputation: true,
-        certify: true,
-        decision_ledger: true,
       });
     }
 
@@ -372,6 +371,9 @@ export default {
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
       return json({ ok: true, valid: true, account_id: accountId, plan: "free", status: "active", version: VERSION });
     }
+
+    const provenance = await handleProvenance(path, req, env, identity, json);
+    if (provenance) return provenance;
 
     const infra = await handleInfra(path, req, env, identity, json);
     if (infra) return infra;
