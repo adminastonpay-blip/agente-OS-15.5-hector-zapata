@@ -5,24 +5,53 @@ compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
 workers_dev = true
 
-# AI binding (used by the code)
 [ai]
 binding = "AI"
 
-# D1 used by the application
 [[d1_databases]]
 binding = "DB"
 database_name = "sos-db"
 database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 
-# Queue producer used by the code
 [[queues.producers]]
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
-# Durable Objects temporarily removed.
-# Remote has conflicting migration history for SessionMemory (error 10074).
-# Once this deploy succeeds we will re-add them one by one using the correct exports or matching migration tags.
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionMemory"
+
+[[durable_objects.bindings]]
+name = "GRAPH"
+class_name = "GraphResolver"
+
+[[durable_objects.bindings]]
+name = "SUPERVISOR"
+class_name = "Supervisor"
+
+[[durable_objects.bindings]]
+name = "AGENT"
+class_name = "AgentNode"
+
+[[durable_objects.bindings]]
+name = "SIMULATION"
+class_name = "SimulationTwin"
+
+[[durable_objects.bindings]]
+name = "MISSION"
+class_name = "MissionBrain"
+
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionMemory"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AgentNode", "GraphResolver", "MissionBrain", "SafetyInterlock", "SimulationTwin", "Supervisor"]
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
