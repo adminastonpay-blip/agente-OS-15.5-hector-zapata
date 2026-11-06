@@ -18,7 +18,9 @@ export async function resolveIdentity(req: Request, env: Env): Promise<Identity>
   };
 }
 
-export function requireAdmin(id: Identity, env: Env): boolean {
-  if (!env.API_KEY) return true; // no key configured → open admin for edge bootstrap
-  return id.method === "apikey" || id.roles.includes("admin") || id.roles.includes("executor");
+export function requireAdmin(id: Identity, _env: Env): boolean {
+  // Fail closed: missing API_KEY must never turn an unauthenticated request into an admin.
+  // Cloudflare Access identities may still administer when an explicit privileged role is present.
+  return id.method !== "public" &&
+    (id.roles.includes("admin") || id.roles.includes("executor"));
 }
