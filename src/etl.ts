@@ -5,6 +5,9 @@ import { embed, chunk } from "./lib/ai";
 export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
   for (const msg of batch.messages) {
     try {
+      const db = env.DB;
+      const vectorize = env.VECTORIZE;
+      if (!db || !vectorize) throw new Error("ETL requires DB and VECTORIZE bindings");
       const job = msg.body as any;
       const rawId = `raw_${crypto.randomUUID()}`;
       await emitLineage(env, {
@@ -20,9 +23,9 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
         values: vectors[i],
         metadata: { source: job.source, chunk: c.slice(0, 500), tenant: job.tenant },
       }));
-      await env.VECTORIZE.upsert(upserts as any);
+      await vectorize.upsert(upserts as any);
       for (const u of upserts) {
-        await env.DB.prepare(
+        await db.prepare(
           "INSERT OR REPLACE INTO documents (id, source, chunk, created_at) VALUES (?, ?, ?, ?)"
         ).bind(u.id, u.metadata.source, u.metadata.chunk, Date.now()).run();
         await emitLineage(env, {
@@ -37,13 +40,16 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
 }
 
 export async function handleCron(env: Env) {
+  const db = env.DB;
+  const vectorize = env.VECTORIZE;
+  if (!db || !vectorize) throw new Error("Cron ETL requires DB and VECTORIZE bindings");
   const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
-  const stale = await env.DB.prepare(
+  const stale = await db.prepare(
     `SELECT id, source, chunk FROM documents WHERE created_at < ? LIMIT 50`
   ).bind(cutoff).all();
   for (const d of stale.results as any[]) {
     const [v] = await embed(env, [d.chunk]);
-    await env.VECTORIZE.upsert([{ id: d.id, values: v,
+    await vectorize.upsert([{ id: d.id, values: v,
       metadata: { source: d.source, chunk: d.chunk.slice(0, 500) } }] as any);
     await emitLineage(env, {
       object_id: d.id, transformation: "cron.reembed",
