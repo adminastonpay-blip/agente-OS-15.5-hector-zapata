@@ -1,10 +1,13 @@
 import type { Env, Identity } from "../types";
-import { computeArr, defaultEnvelope, envelopeAllows, quotePolicy, type RiskEnvelope } from "../risk/arr";
+import { computeArr, defaultEnvelope, quotePolicy, type RiskEnvelope } from "../risk/arr";
 import {
   saveEnvelope,
   loadEnvelope,
   listEnvelopes,
   assessDecision,
+  isAdmin,
+  sanitizeExposure,
+  consumeExposure,
 } from "../risk/envelope";
 import { recordDecision } from "../provenance/replay";
 import { getPassport } from "../economy/reputation";
@@ -48,13 +51,12 @@ export async function handleRisk(
       impact_depth: body.impact_depth,
       reversible: body.reversible,
       human_approved: body.human_approved,
-      exposure_usd: body.exposure_usd,
+      exposure_usd: sanitizeExposure(body.exposure_usd),
       domain: body.domain,
     });
-    return json({ ok: true, protocol: "ARR-v1", ...arr });
+    return json({ ok: true, protocol: "ARR-v1.1", ...arr });
   }
 
-  // Risk Envelope v1 assess
   if ((path === "/v1/risk/assess" || path === "/v1/risk/assessment") && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const tenant = identity.tenant || "default";
@@ -68,8 +70,8 @@ export async function handleRisk(
     }
     const result = await assessDecision(env, tenant, {
       agent_id,
-      estimated_exposure: Number(body.estimated_exposure ?? body.exposure_usd ?? 0),
-      exposure_usd: Number(body.estimated_exposure ?? body.exposure_usd ?? 0),
+      estimated_exposure: sanitizeExposure(body.estimated_exposure ?? body.exposure_usd ?? 0),
+      exposure_usd: sanitizeExposure(body.estimated_exposure ?? body.exposure_usd ?? 0),
       evidence_count: Array.isArray(body.evidence)
         ? body.evidence.length
         : Number(body.evidence_count) || 0,
@@ -79,15 +81,19 @@ export async function handleRisk(
       impact_depth: body.impact_depth,
       reversible: body.reversible !== false,
       human_approved: !!body.human_approved,
+      cumulative_exposure: sanitizeExposure(body.cumulative_exposure),
       domain: body.domain || "logistics",
     });
     return json({
       ok: true,
-      protocol: "ARR-v1",
+      protocol: "ARR-v1.1",
       ...result,
-      summary: result.gate.allowed
-        ? `Agent may act within envelope (max $${result.envelope.max_exposure_usd})`
-        : `Blocked: ${result.gate.reasons.join(", ")}`,
+      summary:
+        result.gate.verdict === "allow"
+          ? `Allowed within envelope (max $${result.envelope.max_exposure_usd})`
+          : result.gate.verdict === "require_approval"
+            ? `Requires human approval: ${result.gate.reasons.join(", ")}`
+            : `Denied: ${result.gate.reasons.join(", ")}`,
     });
   }
 
@@ -97,7 +103,7 @@ export async function handleRisk(
     if (!question) return json({ ok: false, error: "question required" }, 400);
 
     const agent_id = String(body.agent_id || "default-agent").slice(0, 64);
-    const exposure_usd = Number(body.exposure_usd) || 0;
+    const exposure_usd = sanitizeExposure(body.exposure_usd);
     const tenant = identity.tenant || "default";
 
     let agent_trust_score = Number(body.agent_trust_score) || 50;
@@ -106,6 +112,25 @@ export async function handleRisk(
       if (passport) agent_trust_score = passport.trust_score;
     } catch {
       /* optional */
+    }
+
+    // Envelope body only applied if admin
+    if (body.envelope && isAdmin(identity)) {
+      const base =
+        (await loadEnvelope(env, tenant, agent_id)) || defaultEnvelope(agent_id, tenant);
+      const envelope: RiskEnvelope = {
+        ...base,
+        ...body.envelope,
+        agent_id,
+        tenant,
+        max_exposure_usd: sanitizeExposure(
+          body.envelope.max_exposure_usd ?? base.max_exposure_usd
+        ),
+        updated_at: Date.now(),
+      };
+      await saveEnvelope(env, envelope);
+    } else if (body.envelope && !isAdmin(identity)) {
+      return json({ ok: false, error: "envelope mutation requires admin" }, 403);
     }
 
     const assessed = await assessDecision(env, tenant, {
@@ -123,12 +148,6 @@ export async function handleRisk(
       human_approved: !!body.human_approved,
       domain: body.domain || "logistics",
     });
-
-    let envelope = assessed.envelope;
-    if (body.envelope) {
-      envelope = { ...envelope, ...body.envelope, agent_id, tenant, updated_at: Date.now() };
-      await saveEnvelope(env, envelope);
-    }
 
     const policy = quotePolicy(tenant, assessed.arr, {
       agent_id,
@@ -148,6 +167,7 @@ export async function handleRisk(
             risk_band: assessed.arr.risk_band,
             exposure_usd,
             assessment_id: assessed.assessment_id,
+            gate: assessed.gate,
           },
           agent_id,
           human_approver: body.human_approver,
@@ -163,36 +183,42 @@ export async function handleRisk(
     }
 
     if (assessed.gate.allowed && exposure_usd > 0) {
-      envelope.used_exposure_usd += exposure_usd;
-      envelope.used_decisions += 1;
-      envelope.updated_at = Date.now();
-      await saveEnvelope(env, envelope);
+      await consumeExposure(env, tenant, agent_id, exposure_usd);
     }
 
     await savePolicy(env, policy);
 
     return json({
       ok: true,
-      protocol: "ARR-v1",
+      protocol: "ARR-v1.1",
       category: "Decision Risk Fabric",
       assessment_id: assessed.assessment_id,
       arr: assessed.arr,
       envelope: {
-        agent_id: envelope.agent_id,
-        max_exposure_usd: envelope.max_exposure_usd,
-        used_exposure_usd: envelope.used_exposure_usd,
-        min_arr_score: envelope.min_arr_score,
-        used_decisions: envelope.used_decisions,
+        agent_id: assessed.envelope.agent_id,
+        tenant: assessed.envelope.tenant,
+        max_exposure_usd: assessed.envelope.max_exposure_usd,
+        used_exposure_usd: assessed.envelope.used_exposure_usd,
+        min_arr_score: assessed.envelope.min_arr_score,
+        used_decisions: assessed.envelope.used_decisions,
       },
       gate: assessed.gate,
       policy,
       package_id,
       certificate,
-      execution: assessed.gate.allowed ? "allowed_within_envelope" : "blocked_or_needs_approval",
+      execution:
+        assessed.gate.verdict === "allow"
+          ? "allowed_within_envelope"
+          : assessed.gate.verdict === "require_approval"
+            ? "pending_human_approval"
+            : "denied",
     });
   }
 
   if (path === "/v1/risk/envelope" && req.method === "POST") {
+    if (!isAdmin(identity)) {
+      return json({ ok: false, error: "envelope mutation requires admin role or API key" }, 403);
+    }
     const body = await req.json<any>().catch(() => ({}));
     const agent_id = String(body.agent_id || "").slice(0, 64);
     if (!agent_id) return json({ ok: false, error: "agent_id required" }, 400);
@@ -200,10 +226,15 @@ export async function handleRisk(
     const base = (await loadEnvelope(env, tenant, agent_id)) || defaultEnvelope(agent_id, tenant);
     const envelope: RiskEnvelope = {
       ...base,
-      max_exposure_usd: Number(body.max_exposure_usd) || base.max_exposure_usd,
-      max_decisions_per_day: Number(body.max_decisions_per_day) || base.max_decisions_per_day,
-      min_arr_score: Number(body.min_arr_score) || base.min_arr_score,
+      max_exposure_usd: sanitizeExposure(body.max_exposure_usd ?? base.max_exposure_usd),
+      max_decisions_per_day: Math.max(
+        1,
+        Number(body.max_decisions_per_day) || base.max_decisions_per_day
+      ),
+      min_arr_score: Math.min(100, Math.max(0, Number(body.min_arr_score) || base.min_arr_score)),
       domain: body.domain || base.domain,
+      tenant,
+      agent_id,
       updated_at: Date.now(),
     };
     await saveEnvelope(env, envelope);
@@ -214,8 +245,9 @@ export async function handleRisk(
     const u = new URL(req.url);
     const agent_id = u.searchParams.get("agent_id") || "";
     if (!agent_id) return json({ ok: false, error: "agent_id required" }, 400);
-    const persisted = await loadEnvelope(env, identity.tenant || "default", agent_id);
-    const e = persisted || defaultEnvelope(agent_id, identity.tenant || "default");
+    const tenant = identity.tenant || "default";
+    const persisted = await loadEnvelope(env, tenant, agent_id);
+    const e = persisted || defaultEnvelope(agent_id, tenant);
     return json({ ok: true, envelope: e, persisted: !!persisted });
   }
 
@@ -228,17 +260,22 @@ export async function handleRisk(
     return json({
       ok: true,
       fabric: "Aston Risk Fabric",
-      protocol: "ARR-v1",
+      protocol: "ARR-v1.1",
+      fixes: [
+        "cumulative_plan_exposure",
+        "human_approval_path",
+        "admin_only_envelope_mutation",
+        "tenant_agent_primary_key",
+        "non_negative_exposure",
+        "utc_daily_decision_reset",
+      ],
       tagline: "Models think. Agents act. Aston decides how much trust they deserve.",
       endpoints: {
-        score: "POST /v1/risk/score",
         assess: "POST /v1/risk/assess",
         underwrite: "POST /v1/risk/underwrite",
-        envelope: "POST|GET /v1/risk/envelope",
+        envelope: "POST|GET /v1/risk/envelope (POST admin)",
         envelopes: "GET /v1/risk/envelopes",
       },
-      metric:
-        "% of autonomous decisions that are explainable, reproducible, risk-limited, and reversible",
     });
   }
 

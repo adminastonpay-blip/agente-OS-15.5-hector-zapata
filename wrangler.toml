@@ -45,7 +45,6 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
-# Migration history — do not reorder or re-list SessionMemory under a new tag
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionMemory"]
@@ -65,4 +64,4 @@ new_sqlite_classes = [
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
-DEPLOY_PROFILE = "21.4-stable"
+DEPLOY_PROFILE = "21.6.2-envelope"
