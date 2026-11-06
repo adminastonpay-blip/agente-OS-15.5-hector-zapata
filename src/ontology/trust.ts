@@ -222,7 +222,7 @@ export async function handleTrust(
   if (path === "/v1/ontology/objects/validated" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     try {
-      const { createValidatedObject } = await import("./ontology");
+      const { createValidatedObject } = await import("../ontology");
       const result = await createValidatedObject(env, identity, body);
       return json({ ok: true, ...result });
     } catch (e: any) {
