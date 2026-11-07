@@ -1,10 +1,10 @@
-/** Cloudflare Worker Env — all optional resources soft-fail when unbound. */
+/** Cloudflare Worker Env — optional resources soft-fail when unbound. */
 export interface Env {
-  // Required for core chat
-  AI: Ai;
-  SESSION: DurableObjectNamespace;
+  // AI is expected; chat soft-fails if missing
+  AI?: Ai;
 
-  // Durable Objects (bound in wrangler)
+  // Durable Objects — optional so deploy works even if binding lags
+  SESSION?: DurableObjectNamespace;
   GRAPH?: DurableObjectNamespace;
   SUPERVISOR?: DurableObjectNamespace;
   AGENT?: DurableObjectNamespace;
@@ -22,8 +22,8 @@ export interface Env {
 
   // Vars / secrets
   AI_GATEWAY_ID?: string;
-  CHAT_MODEL: string;
-  EMBED_MODEL: string;
+  CHAT_MODEL?: string;
+  EMBED_MODEL?: string;
   DEPLOY_PROFILE?: string;
   API_KEY?: string;
   PII_HMAC_SECRET?: string;

@@ -1,3 +1,8 @@
+# ASTON OS — Cloudflare Worker
+# DO lifecycle uses declarative `exports` (Cloudflare 2026 best practice).
+# Do NOT mix `exports` with legacy `[[migrations]]` — they are mutually exclusive.
+# This avoids error 10074 (re-applying new_sqlite_classes on existing classes).
+
 name = "agente-os-15-5-hector-zapata"
 main = "src/index.ts"
 compatibility_date = "2026-11-03"
@@ -17,12 +22,66 @@ database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
-# All Durable Object bindings removed temporarily.
-# Remote forces re-application of old migrations (tag v2) which fails on SessionMemory (error 10074).
-# Once a clean deploy succeeds we can re-add them carefully.
+# —— Durable Object bindings (runtime access via env.*) ——
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionMemory"
+
+[[durable_objects.bindings]]
+name = "GRAPH"
+class_name = "GraphResolver"
+
+[[durable_objects.bindings]]
+name = "SUPERVISOR"
+class_name = "Supervisor"
+
+[[durable_objects.bindings]]
+name = "AGENT"
+class_name = "AgentNode"
+
+[[durable_objects.bindings]]
+name = "SIMULATION"
+class_name = "SimulationTwin"
+
+[[durable_objects.bindings]]
+name = "MISSION"
+class_name = "MissionBrain"
+
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
+
+# —— Declarative DO class lifecycle (replaces [[migrations]]) ——
+[exports.SessionMemory]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.GraphResolver]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.Supervisor]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.AgentNode]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.SimulationTwin]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.MissionBrain]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
 
 [vars]
 AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
-DEPLOY_PROFILE = "21.6.2-envelope"
+DEPLOY_PROFILE = "21.6.3-cf-audit"

@@ -26,6 +26,7 @@ import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
+// Required: exported class names must match wrangler [exports.*] and bindings
 export {
   SessionMemory,
   GraphResolver,
@@ -36,7 +37,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.6.1-envelope";
+const VERSION = "21.6.3-cf-audit";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -58,15 +59,26 @@ const SYSTEM_SOLVE =
   SYSTEM_CHAT +
   "\nPara problemas complejos: 1) reformulá el objetivo en una línea 2) listá 2-5 pasos 3) indicá la próxima acción 4) mencioná datos que falten.";
 
-async function loadHistory(env: Env, session_id: string, body: any) {
-  const stub = env.SESSION.get(env.SESSION.idFromName(session_id));
+async function loadHistory(
+  env: Env,
+  session_id: string,
+  body: any
+): Promise<{ stub: DurableObjectStub | null; history: any[] }> {
   let history: any[] = [];
-  try {
-    const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
-    history = mem.history ?? [];
-  } catch {
-    history = [];
+  let stub: DurableObjectStub | null = null;
+
+  // Soft-fail if SESSION binding is not available (deploy without DOs still serves chat)
+  if (env.SESSION) {
+    try {
+      stub = env.SESSION.get(env.SESSION.idFromName(session_id));
+      const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
+      history = mem.history ?? [];
+    } catch {
+      history = [];
+      stub = null;
+    }
   }
+
   if (!history.length && Array.isArray(body.history)) {
     history = body.history
       .filter(
@@ -78,7 +90,12 @@ async function loadHistory(env: Env, session_id: string, body: any) {
   return { stub, history };
 }
 
-async function appendHistory(stub: DurableObjectStub, message: string, answer: string) {
+async function appendHistory(
+  stub: DurableObjectStub | null,
+  message: string,
+  answer: string
+) {
+  if (!stub) return;
   try {
     await stub.fetch("https://do/append", {
       method: "POST",
@@ -95,6 +112,9 @@ async function appendHistory(stub: DurableObjectStub, message: string, answer: s
 
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
+    if (!env.AI) {
+      return json({ ok: false, error: "AI binding not configured" }, 503);
+    }
     const body = await req.json<any>().catch(() => ({}));
     const message =
       typeof body.message === "string"
@@ -128,6 +148,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
       model: out.model,
       mode: useDeep ? "deep" : "chat",
       version: VERSION,
+      session_persisted: !!stub,
       actions: actions.length ? actions : undefined,
     });
   } catch (e: any) {
@@ -140,6 +161,9 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
 
 async function handleChatStream(req: Request, env: Env): Promise<Response> {
   try {
+    if (!env.AI) {
+      return json({ ok: false, error: "AI binding not configured" }, 503);
+    }
     const body = await req.json<any>().catch(() => ({}));
     const message =
       typeof body.message === "string"
@@ -212,12 +236,16 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
       },
     });
   } catch (e: any) {
-    return json({ ok: false, error: "stream unavailable", detail: String(e?.message || e).slice(0, 250) }, 502);
+    return json(
+      { ok: false, error: "stream unavailable", detail: String(e?.message || e).slice(0, 250) },
+      502
+    );
   }
 }
 
 async function handleTts(req: Request, env: Env): Promise<Response> {
   try {
+    if (!env.AI) return json({ ok: false, error: "AI binding not configured" }, 503);
     const body = await req.json<any>().catch(() => ({}));
     const text =
       (typeof body.text === "string" && body.text.trim()) ||
@@ -240,12 +268,16 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
     }
     return json({ ok: true, model, audio: raw, format: "unknown" });
   } catch (e: any) {
-    return json({ ok: false, error: "TTS unavailable", detail: String(e?.message || e).slice(0, 250) }, 502);
+    return json(
+      { ok: false, error: "TTS unavailable", detail: String(e?.message || e).slice(0, 250) },
+      502
+    );
   }
 }
 
 async function handleVoice(req: Request, env: Env): Promise<Response> {
   try {
+    if (!env.AI) return json({ ok: false, error: "AI binding not configured" }, 503);
     const body = await req.json<any>().catch(() => ({}));
     const text =
       (typeof body.text === "string" && body.text.trim()) ||
@@ -271,7 +303,10 @@ async function handleVoice(req: Request, env: Env): Promise<Response> {
     }
     return json({ ok: true, profile: profile.id, model, text_spoken: spoken, audio: raw || null });
   } catch (e: any) {
-    return json({ ok: false, error: "Voice unavailable", detail: String(e?.message || e).slice(0, 250) }, 502);
+    return json(
+      { ok: false, error: "Voice unavailable", detail: String(e?.message || e).slice(0, 250) },
+      502
+    );
   }
 }
 
@@ -300,8 +335,14 @@ export default {
         product: "Aston Risk Fabric",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.6-envelope",
+        profile: env.DEPLOY_PROFILE ?? "21.6.3-cf-audit",
         pillars: pillarStatus(env),
+        bindings: {
+          ai: !!env.AI,
+          session: !!env.SESSION,
+          db: !!env.DB,
+          etl_queue: !!env.ETL_QUEUE,
+        },
         risk: {
           assess: "/v1/risk/assess",
           underwrite: "/v1/risk/underwrite",
@@ -355,7 +396,12 @@ export default {
     if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env);
     if (path === "/v1/voice" && req.method === "POST") return handleVoice(req, env);
     if (path === "/v1/voice/profiles" && req.method === "GET") {
-      return json({ ok: true, default: "aston_executive", profiles: Object.values(VOICE_PROFILES), version: VERSION });
+      return json({
+        ok: true,
+        default: "aston_executive",
+        profiles: Object.values(VOICE_PROFILES),
+        version: VERSION,
+      });
     }
     if (path === "/v1/validate" && req.method === "POST") {
       const body = await req.json<any>().catch(() => ({}));
@@ -364,7 +410,14 @@ export default {
         (typeof body.id === "string" && body.id.trim()) ||
         "";
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
-      return json({ ok: true, valid: true, account_id: accountId, plan: "free", status: "active", version: VERSION });
+      return json({
+        ok: true,
+        valid: true,
+        account_id: accountId,
+        plan: "free",
+        status: "active",
+        version: VERSION,
+      });
     }
 
     const risk = await handleRisk(path, req, env, identity, json);
