@@ -58,8 +58,7 @@ const SYSTEM_CHAT =
 
 const SYSTEM_SOLVE =
   SYSTEM_CHAT +
-  "
-Para problemas complejos: 1) reformulá el objetivo en una línea 2) listá 2-5 pasos 3) indicá la próxima acción 4) mencioná datos que falten.";
+  "\nPara problemas complejos: 1) reformulá el objetivo en una línea 2) listá 2-5 pasos 3) indicá la próxima acción 4) mencioná datos que falten.";
 
 async function loadHistory(
   env: Env,
