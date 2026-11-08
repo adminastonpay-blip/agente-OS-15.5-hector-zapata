@@ -14,7 +14,7 @@ import {
   inferActions,
   runTts,
 } from "./lib/skills";
-import { resolveIdentity } from "./lib/identity";
+import { resolveIdentity, requireAdmin } from "./lib/identity";
 import { handleV21, pillarStatus } from "./routes/v21";
 import { handleSovereign } from "./routes/sovereign";
 import { handleFactory } from "./routes/factory";
@@ -23,10 +23,10 @@ import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
+import { handleTrust } from "./routes/trust";
 import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 
-// Required: exported class names must match wrangler [exports.*] and bindings
 export {
   SessionMemory,
   GraphResolver,
@@ -37,7 +37,7 @@ export {
   SafetyInterlock,
 };
 
-const VERSION = "21.6.3-cf-audit";
+const VERSION = "21.6.4-trust";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -66,8 +66,6 @@ async function loadHistory(
 ): Promise<{ stub: DurableObjectStub | null; history: any[] }> {
   let history: any[] = [];
   let stub: DurableObjectStub | null = null;
-
-  // Soft-fail if SESSION binding is not available (deploy without DOs still serves chat)
   if (env.SESSION) {
     try {
       stub = env.SESSION.get(env.SESSION.idFromName(session_id));
@@ -78,7 +76,6 @@ async function loadHistory(
       stub = null;
     }
   }
-
   if (!history.length && Array.isArray(body.history)) {
     history = body.history
       .filter(
@@ -112,9 +109,7 @@ async function appendHistory(
 
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
-    if (!env.AI) {
-      return json({ ok: false, error: "AI binding not configured" }, 503);
-    }
+    if (!env.AI) return json({ ok: false, error: "AI binding not configured" }, 503);
     const body = await req.json<any>().catch(() => ({}));
     const message =
       typeof body.message === "string"
@@ -161,9 +156,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
 
 async function handleChatStream(req: Request, env: Env): Promise<Response> {
   try {
-    if (!env.AI) {
-      return json({ ok: false, error: "AI binding not configured" }, 503);
-    }
+    if (!env.AI) return json({ ok: false, error: "AI binding not configured" }, 503);
     const body = await req.json<any>().catch(() => ({}));
     const message =
       typeof body.message === "string"
@@ -332,32 +325,32 @@ export default {
       return json({
         ok: true,
         service: "ASTON OS",
-        product: "Aston Risk Fabric",
+        product: "Aston Trust + Risk Fabric",
         ts: Date.now(),
         version: VERSION,
-        profile: env.DEPLOY_PROFILE ?? "21.6.3-cf-audit",
+        profile: env.DEPLOY_PROFILE ?? "21.6.4-trust",
+        branch_note: "trust/decision-passport-v0",
         pillars: pillarStatus(env),
         bindings: {
           ai: !!env.AI,
           session: !!env.SESSION,
           db: !!env.DB,
+          vectorize: !!env.VECTORIZE,
           etl_queue: !!env.ETL_QUEUE,
         },
-        risk: {
-          assess: "/v1/risk/assess",
-          underwrite: "/v1/risk/underwrite",
-          envelopes: "/v1/risk/envelopes",
-          status: "/v1/risk/status",
+        trust: {
+          verify: "/v1/trust/verify",
+          status: "/v1/trust/status",
+          signing_secret: !!(env.PII_HMAC_SECRET || env.API_KEY),
         },
-        agents: { plans: "/v1/agents/plans" },
         tagline: "Models think. Agents act. Aston decides how much trust they deserve.",
         chat_model: env.CHAT_MODEL,
         ai_bound: !!env.AI,
         skills: [
+          "decision-passport",
+          "trust-verify",
+          "tenant-isolation-p0",
           "risk-envelope-v1",
-          "arr-assess",
-          "governed-agents-exposure",
-          "decision-provenance",
           "chat",
         ],
       });
@@ -368,9 +361,8 @@ export default {
         ok: true,
         version: VERSION,
         pillars: pillarStatus(env),
+        trust_passport: true,
         risk_fabric: true,
-        risk_envelope_v1: true,
-        governed_agents: true,
         decision_provenance: true,
       });
     }
@@ -403,7 +395,20 @@ export default {
         version: VERSION,
       });
     }
+
+    // P0: validate is NOT a production identity/license check
     if (path === "/v1/validate" && req.method === "POST") {
+      if (identity.method === "public" || !requireAdmin(identity, env)) {
+        return json(
+          {
+            ok: false,
+            error: "unauthorized",
+            detail: "/v1/validate requires API key or Access admin",
+            production_ready: false,
+          },
+          401
+        );
+      }
       const body = await req.json<any>().catch(() => ({}));
       const accountId =
         (typeof body.account_id === "string" && body.account_id.trim()) ||
@@ -412,13 +417,16 @@ export default {
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
       return json({
         ok: true,
-        valid: true,
+        valid: null,
         account_id: accountId,
-        plan: "free",
-        status: "active",
+        production_ready: false,
+        note: "Stub only — not a license or payment authority. Wire billing DB before relying on valid:true.",
         version: VERSION,
       });
     }
+
+    const trust = await handleTrust(path, req, env, identity, json);
+    if (trust) return trust;
 
     const risk = await handleRisk(path, req, env, identity, json);
     if (risk) return risk;
