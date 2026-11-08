@@ -1,0 +1,19 @@
+name: ASTON OS Audit Staging Validation
+on:
+  push:
+    branches: ["feat/audit-staging-harness-21x"]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts
+      - run: npm run check
+      - run: npx wrangler deploy --dry-run --config wrangler.staging.toml
