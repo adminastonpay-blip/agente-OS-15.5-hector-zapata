@@ -177,10 +177,10 @@ export async function handleStagingAudit(
   // D1, queues, R2 and AI Gateway for this diagnostic call.
   let modelCalls = 0;
   const boundedAI = {
-    run: async (...args: any[]) => {
+    run: async (model: any, inputs: any, options?: any) => {
       if (modelCalls >= 1) throw new Error("audit_model_call_budget_exceeded");
       modelCalls += 1;
-      return env.AI!.run(...(args as any));
+      return env.AI!.run(model, inputs, options);
     },
   };
   const isolatedEnv: Env = {
