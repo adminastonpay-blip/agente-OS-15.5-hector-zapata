@@ -58,7 +58,8 @@ const SYSTEM_CHAT =
 
 const SYSTEM_SOLVE =
   SYSTEM_CHAT +
-  "\nPara problemas complejos: 1) reformulá el objetivo en una línea 2) listá 2-5 pasos 3) indicá la próxima acción 4) mencioná datos que falten.";
+  "
+Para problemas complejos: 1) reformulá el objetivo en una línea 2) listá 2-5 pasos 3) indicá la próxima acción 4) mencioná datos que falten.";
 
 async function loadHistory(
   env: Env,
@@ -188,7 +189,10 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
         ? body.session_id.slice(0, 80)
         : "default";
     const useDeep = deep || body.mode === "deep" || body.deep === true;
-    const identity = await resolveIdentity(req, env);\n    const safety = await enforceChatSafety(env, message, identity);\n    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);\n    const { stub, history } = await loadHistory(env, session_id, body);
+    const identity = await resolveIdentity(req, env);
+    const safety = await enforceChatSafety(env, message, identity);
+    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
+    const { stub, history } = await loadHistory(env, session_id, body);
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
       ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
@@ -196,6 +200,9 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
     ];
     const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
     const answer = out.response || "";
+    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging") && !outputGuard(answer)) {
+      return json({ ok: false, error: "chat_output_guard_blocked" }, 502);
+    }
     await appendHistory(stub, message, answer);
     const actions =
       body.agent?.actions_enabled || body.client?.agent_runtime ? inferActions(message) : [];
@@ -221,6 +228,9 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
 
 async function handleChatStream(req: Request, env: Env): Promise<Response> {
   try {
+    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")) {
+      return json({ ok: false, error: "stream_disabled_until_buffered_safety_guard_is_implemented" }, 503);
+    }
     if (!env.AI) {
       return json({ ok: false, error: "AI binding not configured" }, 503);
     }
@@ -253,7 +263,10 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
       async start(controller) {
         const send = (event: string, data: unknown) => {
           controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+            encoder.encode(`event: ${event}
+data: ${JSON.stringify(data)}
+
+`)
           );
         };
         send("meta", { ok: true, model, stream_mode: mode, session_id, version: VERSION });
