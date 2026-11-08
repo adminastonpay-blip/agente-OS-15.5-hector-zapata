@@ -37,7 +37,7 @@ jobs:
           print(sys.version)
           PY
           pipx --version
-          pipx install "git+https://github.com/rotheric/git-ots.git@29607ca11dd8906f1df113a1b38d6672d94f613ed"
+          pipx install "git+https://github.com/rotheric/git-ots.git@29607ca11dd890a6446d502bbce084a1b7cd716a"
           pipx inject git-ots "opentimestamps-client==0.7.2"
 
       - name: Configure deterministic first-run policy
