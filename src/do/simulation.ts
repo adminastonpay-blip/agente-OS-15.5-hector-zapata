@@ -89,10 +89,10 @@ Analiza impacto, riesgos y recomendación. Sé breve.`;
               gateway: { id: this.env.AI_GATEWAY_ID },
             } as any);
           } catch {
-            r = await this.env.AI.run(this.env.CHAT_MODEL as any, input);
+            r = await ai.run(this.env.CHAT_MODEL as any, input);
           }
         } else {
-          r = await this.env.AI.run(this.env.CHAT_MODEL as any, input);
+          r = await ai.run(this.env.CHAT_MODEL as any, input);
         }
         evaluation =
           typeof r?.response === "string"
