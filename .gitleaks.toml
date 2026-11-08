@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact synthetic AWS-shaped test fixture committed before runtime construction was introduced; path-scoped and pattern-scoped."
+paths = [
+  '''tests/chat-output-guard\.test\.mts$'''
+]
+regexes = [
+  '''AKIA[0-9]{10}ABCDEF'''
+]
