@@ -25,6 +25,7 @@ import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
+import { handleStagingAudit } from "./audit/staging-endpoint";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -316,6 +317,8 @@ export default {
 
     const u = new URL(req.url);
     const path = u.pathname.replace(/\/+$/, "") || "/";
+    const auditResponse = await handleStagingAudit(req, env, handleChat);
+    if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
 
     const cl = Number(req.headers.get("content-length") || 0);
