@@ -45,6 +45,12 @@ export class MissionBrain {
     const diag = await this.diagnose(m);
     this.log("diagnose", "edge_probe", diag.reachable ? "ok" : "failed", JSON.stringify(diag));
 
+    const ai = this.env.AI;
+    if (!ai) {
+      this.log("diagnose", "workers_ai_unavailable", "skipped", "No automated remediation without Workers AI binding");
+      return { mission_id: m.id, restored: false, hypothesis: "Workers AI binding unavailable; no automated action taken", journal_persisted: false };
+    }
+
     const prompt = `Misión recuperación. Origen: ${m.origin}. Error: ${m.error_code}. Pool: ${m.pool_id}. Diag: ${JSON.stringify(diag)}.
 JSON SOLO:
 {"text":"<hipótesis>","confidence":0.0-1.0,"action":"restart|drain|failover|isolate|none"}`;
@@ -52,7 +58,7 @@ JSON SOLO:
     const { masked, vault } = await maskForAgent(prompt, "internal", secret);
     let res: any;
     try {
-      res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
+      res = await ai.run(this.env.CHAT_MODEL as any, {
         messages: [{ role: "user", content: masked }],
       } as any);
     } catch {
