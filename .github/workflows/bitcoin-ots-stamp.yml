@@ -1,6 +1,7 @@
 name: OpenTimestamps Bitcoin Proof
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feat/audit-staging-harness-21x
