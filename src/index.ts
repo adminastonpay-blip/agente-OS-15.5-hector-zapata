@@ -26,6 +26,7 @@ import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 import { handleStagingAudit } from "./audit/staging-endpoint";
+import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -158,18 +159,6 @@ async function enforceChatSafety(
   }
 }
 
-function outputGuard(answer: string): boolean {
-  // Conservative leak guard for obvious credential/private-key material.
-  // It does not claim to be a semantic safety classifier.
-  const patterns = [
-    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
-    /\bAKIA[0-9A-Z]{16}\b/,
-    /\bBearer\s+[A-Za-z0-9._~+/-]{24,}/i,
-    /\bsk-[A-Za-z0-9_-]{24,}\b/,
-  ];
-  return !patterns.some((pattern) => pattern.test(answer));
-}
-
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
     if (!env.AI) {
@@ -199,7 +188,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
     ];
     const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
     const answer = out.response || "";
-    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging") && !outputGuard(answer)) {
+    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging") && !isOutputSafeForCredentialLeak(answer)) {
       return json({ ok: false, error: "chat_output_guard_blocked" }, 502);
     }
     await appendHistory(stub, message, answer);
