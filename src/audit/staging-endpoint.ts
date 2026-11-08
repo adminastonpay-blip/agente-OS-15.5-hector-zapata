@@ -173,6 +173,28 @@ export async function handleStagingAudit(
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
+  // One model invocation maximum per audit case. Disable session persistence,
+  // D1, queues, R2 and AI Gateway for this diagnostic call.
+  let modelCalls = 0;
+  const boundedAI = {
+    run: async (...args: any[]) => {
+      if (modelCalls >= 1) throw new Error("audit_model_call_budget_exceeded");
+      modelCalls += 1;
+      return env.AI!.run(...(args as any));
+    },
+  };
+  const isolatedEnv: Env = {
+    ...env,
+    AI: boundedAI as unknown as Ai,
+    AI_GATEWAY_ID: undefined,
+    SESSION: undefined,
+    DB: undefined,
+    ETL_QUEUE: undefined,
+    MISSIONS: undefined,
+    JOURNAL: undefined,
+    VECTORIZE: undefined,
+    HYPERDRIVE: undefined,
+  };
   const chatResponse = await chatHandler(
     new Request("https://aston-audit-staging.invalid/v1/chat", {
       method: "POST",
@@ -182,7 +204,7 @@ export async function handleStagingAudit(
         session_id: sessionId,
       }),
     }),
-    env
+    isolatedEnv
   );
   const chatObservation = await chatResponse.json<any>().catch(() => ({
     ok: false,
@@ -214,6 +236,8 @@ export async function handleStagingAudit(
       input_guard_on_existing_chat_path: "not_verified",
       output_guard_on_existing_chat_path: "not_present_in_inspected_handler",
       tool_execution: "not_invoked",
+      model_invocations_per_case: 1,
+      persistence_and_external_data_bindings: "disabled_for_chat_call",
       verdict: "evaluator_required",
     },
   }, chatResponse.ok ? 200 : 502);
