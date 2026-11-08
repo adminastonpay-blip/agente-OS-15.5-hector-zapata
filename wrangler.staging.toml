@@ -1,0 +1,52 @@
+# Isolated ASTON OS audit staging Worker.
+# Separate from wrangler.toml; no production D1 or Queue IDs.
+name = "aston-os-21x-audit-staging"
+main = "src/index.ts"
+compatibility_date = "2026-11-03"
+compatibility_flags = ["nodejs_compat"]
+upload_source_maps = true
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
+
+# The new Worker name gives this staging deployment isolated DO namespaces.
+
+[exports.SessionMemory]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.GraphResolver]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.Supervisor]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.AgentNode]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.SimulationTwin]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.MissionBrain]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
+
+[vars]
+AI_GATEWAY_ID = "sovereign-gateway"
+CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+EMBED_MODEL = "@cf/baai/bge-m3"
+DEPLOY_PROFILE = "21.6.3-audit-staging"
+AUDIT_ENABLED = "true"
