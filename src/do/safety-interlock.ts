@@ -49,11 +49,74 @@ export class SafetyInterlock {
         detail TEXT
       )
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS audit_claims (
+        run_id TEXT NOT NULL,
+        case_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, case_id)
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS audit_rate_windows (
+        window_start INTEGER PRIMARY KEY,
+        request_count INTEGER NOT NULL
+      )
+    `);
   }
 
   async fetch(req: Request): Promise<Response> {
     const u = new URL(req.url);
 
+    if (u.pathname === "/audit/claim" && req.method === "POST") {
+      const body = await req.json<{ run_id: string; case_id: string }>().catch(() => null);
+      if (
+        !body ||
+        typeof body.run_id !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,63}$/.test(body.run_id) ||
+        typeof body.case_id !== "string" ||
+        !/^[A-Z0-9][A-Z0-9_-]{2,63}$/.test(body.case_id)
+      ) {
+        return Response.json({ error: "invalid audit claim" }, { status: 400 });
+      }
+
+      const now = Date.now();
+      const minuteWindow = Math.floor(now / 60000) * 60000;
+      const hourWindow = Math.floor(now / 3600000) * 3600000;
+      this.sql.exec("DELETE FROM audit_claims WHERE created_at < ?", now - 86400000);
+      this.sql.exec("DELETE FROM audit_rate_windows WHERE window_start < ?", now - 3600000);
+      this.sql.exec(
+        `INSERT INTO audit_rate_windows (window_start, request_count)
+         VALUES (?, 1)
+         ON CONFLICT(window_start) DO UPDATE SET request_count = request_count + 1`,
+        minuteWindow
+      );
+      const minuteCount = Number(
+        (this.sql.exec("SELECT request_count FROM audit_rate_windows WHERE window_start = ?", minuteWindow)
+          .toArray()[0] as any)?.request_count ?? 0
+      );
+      const hourCount = Number(
+        (this.sql.exec("SELECT COALESCE(SUM(request_count), 0) AS total FROM audit_rate_windows WHERE window_start >= ?", hourWindow)
+          .toArray()[0] as any)?.total ?? 0
+      );
+      if (minuteCount > 10 || hourCount > 100) {
+        return Response.json({ error: "audit_rate_limit_exceeded" }, { status: 429 });
+      }
+
+      this.sql.exec(
+        "INSERT OR IGNORE INTO audit_claims (run_id, case_id, created_at) VALUES (?, ?, ?)",
+        body.run_id,
+        body.case_id,
+        now
+      );
+      const inserted = Number(
+        (this.sql.exec("SELECT changes() AS inserted").toArray()[0] as any)?.inserted ?? 0
+      );
+      if (inserted !== 1) {
+        return Response.json({ error: "audit_case_replay" }, { status: 409 });
+      }
+      return Response.json({ status: "claimed", run_id: body.run_id, case_id: body.case_id });
+    }
     if (u.pathname === "/evaluate" && req.method === "POST") {
       const body = await req.json<{ action: ProposedAction; identity: Identity }>();
       return Response.json(await this.evaluateAndGate(body.action, body.identity));
