@@ -25,6 +25,8 @@ export interface Env {
   CHAT_MODEL?: string;
   EMBED_MODEL?: string;
   DEPLOY_PROFILE?: string;
+  AUDIT_ENABLED?: string;
+  AUDIT_SECRET?: string;
   API_KEY?: string;
   PII_HMAC_SECRET?: string;
   ACCESS_TEAM_DOMAIN?: string;
