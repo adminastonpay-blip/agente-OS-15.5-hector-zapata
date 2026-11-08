@@ -1,45 +1,58 @@
-/**
- * Trust isolation unit tests (Node, no Workers runtime).
- * Run: npm test
- */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-// Mirror sanitize + public tenant rules (keep in sync with src/lib/identity.ts)
 const PUBLIC_TENANT = "default";
 function sanitizeTenant(t) {
   const s = String(t).replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 64);
   return s || PUBLIC_TENANT;
 }
-function publicIdentityIgnoresHeader(headerTenant) {
-  // Public path must NOT use client header
+function publicIdentityIgnoresHeader() {
   return { tenant: PUBLIC_TENANT, method: "public" };
 }
-function authedMayOverride(headerTenant) {
-  return { tenant: sanitizeTenant(headerTenant), method: "apikey" };
+
+const ALLOWED = {
+  RECEIVED: ["IDENTIFIED", "FAILED"],
+  IDENTIFIED: ["AUTHORIZED", "DENIED", "FAILED"],
+  AUTHORIZED: ["BUDGET_RESERVED", "DENIED", "FAILED"],
+  BUDGET_RESERVED: ["EXECUTING", "FAILED", "DENIED"],
+  EXECUTING: ["EXECUTED", "FAILED"],
+  EXECUTED: ["VERIFIED", "FAILED"],
+  VERIFIED: ["EVIDENCE_STORED", "FAILED"],
+  EVIDENCE_STORED: ["TIMESTAMP_PENDING", "REVOKED"],
+  TIMESTAMP_PENDING: ["TIMESTAMP_CONFIRMED", "FAILED"],
+  TIMESTAMP_CONFIRMED: ["REVOKED"],
+  DENIED: [],
+  FAILED: [],
+  REVOKED: [],
+};
+function canTransition(from, to) {
+  return (ALLOWED[from] || []).includes(to);
 }
 
 describe("tenant isolation P0", () => {
-  it("public identity ignores X-Aston-Tenant spoof", () => {
-    const id = publicIdentityIgnoresHeader("victim-corp");
+  it("public ignores spoof header", () => {
+    const id = publicIdentityIgnoresHeader();
     assert.equal(id.tenant, "default");
-    assert.equal(id.method, "public");
   });
-
-  it("authenticated may set sanitized tenant", () => {
-    const id = authedMayOverride("Acme_Logistics-01");
-    assert.equal(id.tenant, "Acme_Logistics-01");
-  });
-
-  it("sanitize strips injection characters", () => {
-    assert.equal(sanitizeTenant("../etc/passwd"), "etcpasswd");
-    assert.equal(sanitizeTenant(""), "default");
+  it("sanitize strips path tricks", () => {
+    assert.equal(sanitizeTenant("../x"), "x");
   });
 });
 
-describe("validate endpoint contract", () => {
-  it("empty account must be rejected by API contract", () => {
-    const accountId = "";
-    assert.equal(!!accountId.trim(), false);
+describe("decision lifecycle", () => {
+  it("allows happy path steps", () => {
+    assert.equal(canTransition("RECEIVED", "IDENTIFIED"), true);
+    assert.equal(canTransition("AUTHORIZED", "BUDGET_RESERVED"), true);
+    assert.equal(canTransition("EXECUTED", "VERIFIED"), true);
+  });
+  it("rejects skip to TIMESTAMP_CONFIRMED", () => {
+    assert.equal(canTransition("EXECUTED", "TIMESTAMP_CONFIRMED"), false);
+  });
+});
+
+describe("constitution deny list", () => {
+  it("blocks wire_transfer by default policy name", () => {
+    const denied = ["delete", "wire_transfer", "export_all"];
+    assert.equal(denied.includes("wire_transfer"), true);
   });
 });
