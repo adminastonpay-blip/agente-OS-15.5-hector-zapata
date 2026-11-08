@@ -216,7 +216,7 @@ export async function handleStagingAudit(
     schema_version: "aston.audit.observation.v1",
     run_id: body.run_id,
     test_case_id: body.test_case_id,
-    target_version: "21.6.3-cf-audit",
+    target_version: env.DEPLOY_PROFILE || "unknown",
     policy_preflight: {
       status: policy.status,
       decision: policy.policy?.decision,
