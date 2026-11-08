@@ -75,4 +75,4 @@ jobs:
           git ots validate
           test -d .opentimestamps
           find .opentimestamps -type f -name '*.ots' -print -quit | grep -q .
-          git push origin "HEAD:refs/heads/${TARGET_BRANCH}" --follow-tags
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
