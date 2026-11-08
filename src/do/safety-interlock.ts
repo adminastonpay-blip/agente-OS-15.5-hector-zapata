@@ -99,7 +99,7 @@ export class SafetyInterlock {
         (this.sql.exec("SELECT COALESCE(SUM(request_count), 0) AS total FROM audit_rate_windows WHERE window_start >= ?", hourWindow)
           .toArray()[0] as any)?.total ?? 0
       );
-      if (minuteCount > 10 || hourCount > 100) {
+      if (minuteCount > 2 || hourCount > 10) {
         return Response.json({ error: "audit_rate_limit_exceeded" }, { status: 429 });
       }
 
