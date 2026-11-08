@@ -62,7 +62,7 @@ JSON SOLO:
         messages: [{ role: "user", content: masked }],
       } as any);
     } catch {
-      res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
+      res = await ai.run(this.env.CHAT_MODEL as any, {
         messages: [{ role: "user", content: masked }],
       } as any);
     }
