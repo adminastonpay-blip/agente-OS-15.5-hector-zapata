@@ -1,9 +1,9 @@
 /**
- * Certified Decision Certificate — signed, verifiable decision record.
+ * Certified Decision Certificate + HMAC Decision Passport (stable verification).
  */
 import type { Env, Identity } from "../types";
-import { generateAgentIdentity, signAction } from "../crypto/pq";
 import { canonicalJson, hashObject, sha256Hex } from "./hash";
+import { issuePassport, type DecisionPassport } from "../trust/hmac-passport";
 
 export interface DecisionCertificate {
   certificate_version: "1.0";
@@ -22,9 +22,13 @@ export interface DecisionCertificate {
   tenant: string;
   actor: string;
   issued_at: number;
+  /** @deprecated ephemeral asymmetric sig — prefer passport */
   signature?: string;
   sig_alg?: string;
   replay_key: string;
+  /** Stable HMAC passport for independent verification */
+  passport?: DecisionPassport | null;
+  trust_note?: string;
 }
 
 export async function issueCertificate(
@@ -57,9 +61,11 @@ export async function issueCertificate(
     evidence_hashes,
   });
   const context_hash = await hashObject(context);
+  const model = input.model || env.CHAT_MODEL || "unknown";
   const replay_key = await sha256Hex(
-    `${input_hash}:${context_hash}:${input.policy_version || "v1"}:${input.model || env.CHAT_MODEL}`
+    `${input_hash}:${context_hash}:${input.policy_version || "v1"}:${model}`
   );
+  const issued_at = Date.now();
 
   const cert: DecisionCertificate = {
     certificate_version: "1.0",
@@ -69,7 +75,7 @@ export async function issueCertificate(
     evidence_hashes,
     policy_version: input.policy_version || "policy-v1",
     ontology_version: input.ontology_version || "onto-v1",
-    model: input.model || env.CHAT_MODEL || "unknown",
+    model,
     agent_id: input.agent_id,
     human_approver: input.human_approver ?? null,
     constitution_id: input.constitution_id ?? null,
@@ -77,28 +83,28 @@ export async function issueCertificate(
     context_hash,
     tenant: identity.tenant || "default",
     actor: identity.actor,
-    issued_at: Date.now(),
+    issued_at,
     replay_key,
   };
 
-  try {
-    const keys = await generateAgentIdentity();
-    if (keys.signingKeys && "privateKey" in keys.signingKeys) {
-      const payload = canonicalJson({
-        decision_id: cert.decision_id,
-        input_hash: cert.input_hash,
-        context_hash: cert.context_hash,
-        outcome: cert.outcome,
-        replay_key: cert.replay_key,
-        issued_at: cert.issued_at,
-      });
-      const signed = await signAction((keys.signingKeys as CryptoKeyPair).privateKey, payload);
-      cert.signature = signed.signature;
-      cert.sig_alg = signed.alg;
-    }
-  } catch {
-    /* signature optional if crypto unavailable */
-  }
+  // Stable passport (HMAC with deploy secret) — independently verifiable
+  const passport = await issuePassport(env, {
+    decision_id,
+    tenant: cert.tenant,
+    actor: cert.actor,
+    question: cert.question,
+    outcome: cert.outcome,
+    evidence_hashes,
+    input_hash,
+    context_hash,
+    replay_key,
+    model,
+    issued_at,
+  });
+  cert.passport = passport;
+  cert.trust_note = passport
+    ? "HMAC-SHA256 passport issued; verify via POST /v1/trust/verify"
+    : "No PII_HMAC_SECRET/API_KEY — passport not issued; set secret for verifiable certificates";
 
   await persistCertificate(env, cert);
   return cert;

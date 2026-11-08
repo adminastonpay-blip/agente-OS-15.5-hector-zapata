@@ -1,14 +1,16 @@
 {
   "name": "agente-os-15-5-hector-zapata",
-  "version": "15.5.0",
+  "version": "21.6.4",
   "private": true,
-  "description": "ASTON OS — Cloudflare Worker (chat, factory, defense, economy)",
+  "description": "ASTON OS — Cloudflare Worker (chat, risk, trust, provenance)",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "test:trust": "node --test tests/trust-isolation.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261106.1",
