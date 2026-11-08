@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - feat/audit-staging-harness-21x
-    paths:
-      - ".github/workflows/bitcoin-ots-stamp.yml"
 
 permissions:
   contents: write
@@ -17,6 +15,7 @@ concurrency:
 
 jobs:
   stamp:
+    if: ${{ !contains(github.event.head_commit.message, 'OpenTimestamps-Generated: true') }}
     name: Stamp staging branch tip
     runs-on: ubuntu-24.04
     timeout-minutes: 20
