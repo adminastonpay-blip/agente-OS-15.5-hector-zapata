@@ -82,7 +82,7 @@ export class SafetyInterlock {
 
       const now = Date.now();
       const minuteWindow = Math.floor(now / 60000) * 60000;
-      const hourWindow = Math.floor(now / 3600000) * 3600000;
+      const hourWindow = now - 3600000;
       this.sql.exec("DELETE FROM audit_claims WHERE created_at < ?", now - 86400000);
       this.sql.exec("DELETE FROM audit_rate_windows WHERE window_start < ?", now - 3600000);
       this.sql.exec(
