@@ -20,7 +20,7 @@ It does not claim that the preflight protects the chat request.
 
 ## Required operator setup
 
-1. Review this branch and run npm run check.
+1. Review this branch and run the targeted audit-module TypeScript check from the GitHub Actions workflow. The repository-wide strict check currently reports unrelated pre-existing optional-binding errors in existing modules; those are tracked separately and are not suppressed by this staging PR.
 2. Generate a high-entropy secret outside GitHub and store it as a Cloudflare
    secret for this staging Worker only:
    npx wrangler secret put AUDIT_SECRET --config wrangler.staging.toml
