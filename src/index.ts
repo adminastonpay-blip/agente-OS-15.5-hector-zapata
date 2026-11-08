@@ -111,6 +111,65 @@ async function appendHistory(
   }
 }
 
+
+async function enforceChatSafety(
+  env: Env,
+  message: string,
+  identity: Awaited<ReturnType<typeof resolveIdentity>>
+): Promise<{ ok: true } | { ok: false; status: number; error: string; policy?: unknown }> {
+  // Enforcement is opt-in and staging-only. Production behavior is unchanged unless
+  // an operator explicitly configures this flag in a staging deployment.
+  if (
+    env.CHAT_SAFETY_ENFORCED !== "true" ||
+    !String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")
+  ) return { ok: true };
+  if (!env.SAFETY) return { ok: false, status: 503, error: "chat_safety_binding_unavailable" };
+
+  try {
+    const stub = env.SAFETY.get(env.SAFETY.idFromName("aston-chat-safety"));
+    const response = await stub.fetch("https://do/evaluate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: {
+          tool: "chat_completion",
+          args: { message_length: message.length },
+          context: { objective: "staging chat request" },
+        },
+        identity,
+      }),
+    });
+    const result = await response.json<any>().catch(() => ({}));
+    if (!response.ok || result.status !== "allowed") {
+      return {
+        ok: false,
+        status: response.ok ? 403 : 503,
+        error: result.status === "pending_approval"
+          ? "chat_requires_human_approval"
+          : result.status === "denied"
+            ? "chat_denied_by_safety_policy"
+            : "chat_safety_evaluation_failed",
+        policy: result.policy,
+      };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 503, error: "chat_safety_unavailable" };
+  }
+}
+
+function outputGuard(answer: string): boolean {
+  // Conservative leak guard for obvious credential/private-key material.
+  // It does not claim to be a semantic safety classifier.
+  const patterns = [
+    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
+    /\bAKIA[0-9A-Z]{16}\b/,
+    /\bBearer\s+[A-Za-z0-9._~+/-]{24,}/i,
+    /\bsk-[A-Za-z0-9_-]{24,}\b/,
+  ];
+  return !patterns.some((pattern) => pattern.test(answer));
+}
+
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
     if (!env.AI) {
@@ -129,7 +188,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
         ? body.session_id.slice(0, 80)
         : "default";
     const useDeep = deep || body.mode === "deep" || body.deep === true;
-    const { stub, history } = await loadHistory(env, session_id, body);
+    const identity = await resolveIdentity(req, env);\n    const safety = await enforceChatSafety(env, message, identity);\n    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);\n    const { stub, history } = await loadHistory(env, session_id, body);
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
       ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
