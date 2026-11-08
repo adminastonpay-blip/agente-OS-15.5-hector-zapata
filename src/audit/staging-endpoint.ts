@@ -56,8 +56,8 @@ function json(data: unknown, status = 200): Response {
 }
 
 /**
- * Staging-only diagnostic harness. It reports the current public chat path's
- * control gaps instead of claiming that a separate preflight protects it.
+ * Staging-only diagnostic harness. It reports actual in-handler chat policy
+ * enforcement and output-guard coverage, separately from its own preflight.
  */
 export async function handleStagingAudit(
   req: Request,
