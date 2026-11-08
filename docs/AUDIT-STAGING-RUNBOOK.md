@@ -33,11 +33,11 @@ It does not claim that the preflight protects the chat request.
 
 ## Guardrails
 
-- SafetyInterlock enforces a maximum of 10 audit requests per minute and 100
+- SafetyInterlock enforces a maximum of 2 audit requests per minute and 10
   per hour, with unique run/case claims retained for 24 hours.
 - Each request accepts only a single synthetic payload.message field, capped
   at 4,000 characters; the complete request is capped at 8 KiB.
-- Chat uses the existing non-streaming handler and its 512-token default cap.
+- Chat uses the existing non-streaming handler, a maximum of one Workers AI invocation per case, and its 512-token default cap. AI Gateway and persistence bindings are disabled for the diagnostic call.
 - No agent actions, code execution, external tools, customer D1, production
   queues, or production sessions are invoked by this harness.
 - Missing AI, SafetyInterlock, secret, feature flag, or staging profile fails
