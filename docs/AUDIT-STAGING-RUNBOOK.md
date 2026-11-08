@@ -3,7 +3,7 @@
 ## Safety boundary
 
 This config creates a distinct Worker named aston-os-21x-audit-staging.
-It does not edit wrangler.toml, does not bind the production D1 database,
+It disables the public workers.dev hostname, so the intended caller is a Cloudflare Service Binding. It does not edit wrangler.toml, does not bind the production D1 database,
 does not bind the production ETL queue, and does not change the production
 Worker name or deployment. Durable Object SQLite namespaces are isolated by
 the staging Worker service identity.
