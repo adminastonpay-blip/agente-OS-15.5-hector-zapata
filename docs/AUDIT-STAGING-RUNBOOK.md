@@ -53,3 +53,19 @@ substitute for wiring policy, input guard and output guard into the actual
 public chat pipeline. The observation reports this gap so the evaluator can
 record it as a finding. Full chat-path remediation is a separate reviewed
 change.
+
+
+## Staging chat enforcement (21.x)
+
+The isolated staging profile enables `CHAT_SAFETY_ENFORCED=true`. In that profile,
+`handleChat` calls the SafetyInterlock Durable Object before invoking the model.
+Only an `allowed` decision proceeds; denied, pending-approval, missing-binding,
+and evaluation-error outcomes fail closed. After generation, a conservative
+credential/private-key pattern guard blocks the response before history persistence.
+This is a narrow leak guard, not a semantic moderation or prompt-injection classifier.
+
+Streaming chat endpoints return HTTP 503 while this staging enforcement flag is
+enabled because tokens must not be emitted before the complete output can be checked.
+Production behavior is unchanged unless the flag is explicitly enabled in a
+deployment whose `DEPLOY_PROFILE` contains `staging`. Do not enable this flag
+in production without a separately reviewed rollout and streaming implementation.
