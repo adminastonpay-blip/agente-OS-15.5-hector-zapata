@@ -26,6 +26,7 @@ import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 import { handleStagingAudit } from "./audit/staging-endpoint";
+import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
@@ -377,6 +378,9 @@ export default {
 
     const u = new URL(req.url);
     const path = u.pathname.replace(/\/+$/, "") || "/";
+    if (!isStagingRouteAllowed(env.DEPLOY_PROFILE, path)) {
+      return json({ ok: false, error: "staging_route_disabled" }, 404);
+    }
     const auditResponse = await handleStagingAudit(req, env, handleChat);
     if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
