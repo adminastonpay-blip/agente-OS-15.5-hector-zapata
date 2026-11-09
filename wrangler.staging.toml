@@ -1,4 +1,5 @@
 # Isolated ASTON OS audit staging Worker.
+# Configure the AUDIT_SECRET secret (minimum 32 characters) in Cloudflare before testing the audit endpoint.
 # Separate from wrangler.toml; no production D1 or Queue IDs.
 name = "aston-os-21x-audit-staging"
 main = "src/index.ts"
@@ -15,30 +16,6 @@ name = "SAFETY"
 class_name = "SafetyInterlock"
 
 # The new Worker name gives this staging deployment isolated DO namespaces.
-
-[exports.SessionMemory]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.GraphResolver]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.Supervisor]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.AgentNode]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.SimulationTwin]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.MissionBrain]
-type = "durable-object"
-storage = "sqlite"
 
 [exports.SafetyInterlock]
 type = "durable-object"
