@@ -19,7 +19,7 @@ concurrency:
 jobs:
   validate:
     name: Typecheck and Wrangler dry run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -31,10 +31,13 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: TypeScript check
         run: npm run check
 
-      - name: Validate Worker bundle
+      - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
+
+      - name: Validate isolated staging configuration bundle (dry run only)
+        run: npx wrangler deploy --dry-run --config wrangler.staging.toml
