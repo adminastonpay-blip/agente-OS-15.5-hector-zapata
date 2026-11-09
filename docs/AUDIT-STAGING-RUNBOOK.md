@@ -2,70 +2,88 @@
 
 ## Safety boundary
 
-This config creates a distinct Worker named aston-os-21x-audit-staging.
-It disables the public workers.dev hostname, so the intended caller is a Cloudflare Service Binding. It does not edit wrangler.toml, does not bind the production D1 database,
-does not bind the production ETL queue, and does not change the production
-Worker name or deployment. Durable Object SQLite namespaces are isolated by
-the staging Worker service identity.
+This branch defines a separate Worker named `aston-os-21x-audit-staging` in
+`wrangler.staging.toml`. It does not modify `wrangler.toml`, the production
+Worker name, production D1 database, production ETL queue, production secrets,
+routes, or bindings.
 
-POST /v1/audit-target is disabled unless AUDIT_ENABLED=true and a staging
-deployment profile are present. It requires the AUDIT_SECRET secret (minimum
-32 characters), a valid authenticated request, a bounded JSON body, a unique
-run/case pair, and SafetyInterlock availability.
+The staging Worker has `workers_dev = true` so it can be smoke-tested after
+deployment. The staging-only route guard allows only:
+- `GET /` and `GET /health` for health/status.
+- `POST /v1/audit-target` for the authenticated diagnostic harness.
 
-The endpoint calls the existing chat handler and separately records a
-SafetyInterlock preflight. It explicitly reports that the existing public
-chat handler does not currently invoke SafetyInterlock or an output guard.
-It does not claim that the preflight protects the chat request.
+All other application routes return 404 in this staging profile. Production
+routing is unchanged. The audit endpoint also requires the `AUDIT_SECRET`
+runtime secret (minimum 32 characters), `AI`, and the isolated
+`SafetyInterlock` Durable Object binding. Never commit the secret.
 
-## Required operator setup
+## Required Cloudflare setup
 
-1. Review this branch and run the targeted audit-module TypeScript check from the GitHub Actions workflow. The repository-wide strict check currently reports unrelated pre-existing optional-binding errors in existing modules; those are tracked separately and are not suppressed by this staging PR.
-2. Generate a high-entropy secret outside GitHub and store it as a Cloudflare
-   secret for this staging Worker only:
-   npx wrangler secret put AUDIT_SECRET --config wrangler.staging.toml
-3. Verify Cloudflare account, Worker name, AI availability and billing limits.
-4. Deploy only the staging config after explicit operator approval:
-   npx wrangler deploy --config wrangler.staging.toml
-5. Confirm /health reports the staging profile and do not send customer data.
-6. Configure Trust Fabric Service Binding only after the staging Worker exists
-   and its exact service name has been verified.
+1. Create or select a **new, separate** Worker named
+   `aston-os-21x-audit-staging`. Do not connect this branch to the existing
+   production Worker.
+2. Connect repository
+   `adminastonpay-blip/agente-OS-15.5-hector-zapata` and branch
+   `feat/audit-staging-harness-21x`.
+3. In Workers Builds → Settings → Builds, set the deploy command explicitly to:
+   `npx wrangler deploy --config wrangler.staging.toml`
+   (or `npm run deploy:staging` if that script is added later). Do not use the
+   default `npx wrangler deploy`, because the root `wrangler.toml` names the
+   production Worker.
+4. In the staging Worker only, add the runtime secret `AUDIT_SECRET` under
+   Settings → Variables & Secrets. Use a high-entropy value of at least 32
+   characters. Do not put it in GitHub variables, source files, or chat.
+5. Confirm the staging Worker has the Workers AI binding `AI`. The staging
+   config provisions only the `SafetyInterlock` SQLite Durable Object class.
+   It intentionally has no production D1, Queue, R2, Vectorize, Hyperdrive,
+   or session bindings.
+6. Verify the account, Workers AI availability, and usage/billing limits before
+   deployment. The repository dry-run cannot prove account-level resources,
+   secret presence, permissions, or service availability.
 
-## Guardrails
+## Validation and smoke test
 
-- SafetyInterlock enforces a maximum of 2 audit requests per minute and 10
-  per hour, with unique run/case claims retained for 24 hours.
-- Each request accepts only a single synthetic payload.message field, capped
-  at 4,000 characters; the complete request is capped at 8 KiB.
-- Chat uses the existing non-streaming handler, a maximum of one Workers AI invocation per case, and its 512-token default cap. AI Gateway and persistence bindings are disabled for the diagnostic call.
+GitHub Actions validates the code and both Wrangler configurations with dry
+runs. A dry-run does not deploy or provision remote resources.
+
+After the isolated staging Worker is deployed:
+1. Open `GET /health` and verify the response reports profile
+   `21.6.3-audit-staging`.
+2. Send only synthetic test data to `POST /v1/audit-target`, with the
+   `x-audit-token` header set to the staging `AUDIT_SECRET`.
+3. The request body must use schema version `aston.audit.request.v1`, a
+   unique `run_id`, a `test_case_id`, and a single `payload.message` field.
+4. Confirm the response reports the policy preflight and the chat observation.
+   Do not use customer records, production credentials, or sensitive data.
+
+## Runtime guardrails
+
+- Maximum 2 audit claims per minute and 10 per hour; unique run/case claims
+  are retained for 24 hours.
+- Request body capped at 8 KiB; message capped at 4,000 characters.
+- One Workers AI invocation maximum per audit case.
+- The diagnostic chat call disables session persistence, D1, queues, R2,
+  Vectorize, Hyperdrive, and AI Gateway.
 - No agent actions, code execution, external tools, customer D1, production
   queues, or production sessions are invoked by this harness.
 - Missing AI, SafetyInterlock, secret, feature flag, or staging profile fails
   closed.
-- No deployment, secret creation, binding change, or campaign execution is
-  performed by committing these files.
+- Streaming chat is disabled in the staging profile until the full output can
+  be checked before tokens are emitted.
+- The staging route guard blocks all other application endpoints. Health
+  endpoints are read-only; the diagnostic endpoint is secret-protected.
 
-## Known coverage gap
+## Coverage limitations
 
-The inspected public chat route currently calls the model directly. The
-SafetyInterlock preflight in this harness is a separate diagnostic, not a
-substitute for wiring policy, input guard and output guard into the actual
-public chat pipeline. The observation reports this gap so the evaluator can
-record it as a finding. Full chat-path remediation is a separate reviewed
-change.
+The credential-pattern output guard is a narrow leak guard, not semantic
+moderation, prompt-injection detection, or a complete data-loss-prevention
+system. The audit harness is a bounded diagnostic of the existing chat path,
+not proof of complete security certification. Full Workers-runtime integration
+testing and a formal security review remain separate release-hardening tasks.
 
+## Release boundary
 
-## Staging chat enforcement (21.x)
-
-The isolated staging profile enables `CHAT_SAFETY_ENFORCED=true`. In that profile,
-`handleChat` calls the SafetyInterlock Durable Object before invoking the model.
-Only an `allowed` decision proceeds; denied, pending-approval, missing-binding,
-and evaluation-error outcomes fail closed. After generation, a conservative
-credential/private-key pattern guard blocks the response before history persistence.
-This is a narrow leak guard, not a semantic moderation or prompt-injection classifier.
-
-Streaming chat endpoints return HTTP 503 while this staging enforcement flag is
-enabled because tokens must not be emitted before the complete output can be checked.
-Production behavior is unchanged unless the flag is explicitly enabled in a
-deployment whose `DEPLOY_PROFILE` contains `staging`. Do not enable this flag
-in production without a separately reviewed rollout and streaming implementation.
+No merge, production deployment, production binding change, D1 migration,
+secret creation in production, route change, or campaign execution is
+authorized by this runbook. A successful GitHub dry-run is not a deployment.
+A successful staging deployment is not production approval.
