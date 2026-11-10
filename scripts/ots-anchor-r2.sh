@@ -21,8 +21,15 @@ import sys
 from urllib.parse import urlparse
 
 parsed = urlparse(sys.argv[1])
-if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
     raise SystemExit("R2_ENDPOINT must be a valid HTTPS endpoint URL.")
+if not parsed.hostname.endswith(".r2.cloudflarestorage.com"):
+    raise SystemExit("ASTON_R2_ENDPOINT must use Cloudflare's S3 API host: https://<ACCOUNT_ID>.r2.cloudflarestorage.com")
+import socket
+try:
+    socket.getaddrinfo(parsed.hostname, 443)
+except socket.gaierror:
+    raise SystemExit("ASTON_R2_ENDPOINT hostname does not resolve. Copy the S3 API endpoint from Cloudflare R2 Overview.")
 print(f"{parsed.scheme}://{parsed.netloc}")
 PY
 )"
