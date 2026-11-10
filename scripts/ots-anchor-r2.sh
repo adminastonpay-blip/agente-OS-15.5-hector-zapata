@@ -40,7 +40,14 @@ while IFS= read -r key; do
     mv "$manifest.ots" "$proof"
   fi
 
-  verification="$(ots verify "$proof" 2>&1 || true)"
+  if [[ -z "${OTS_BITCOIN_NODE:-}" ]]; then
+    aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$pending_key" \
+      --content-type "application/vnd.opentimestamps"
+    echo "Proof created/upgraded but not independently confirmed: configure OTS_BITCOIN_NODE."
+    continue
+  fi
+
+  verification="$(ots --bitcoin-node "$OTS_BITCOIN_NODE" verify "$proof" 2>&1 || true)"
   printf '%s\n' "$verification"
 
   if grep -q "Success! Bitcoin block" <<<"$verification"; then
