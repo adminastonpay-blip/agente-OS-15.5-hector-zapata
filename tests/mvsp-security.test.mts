@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Identity } from "../src/types";
-import { authorizeApiRequest } from "../src/security/mvsp-access.ts";
-import { resolveIdentity } from "../src/lib/identity.ts";
+import { anonymousIdentity, authorizeApiRequest } from "../src/security/mvsp-access.ts";
 import { planFromIdentity } from "../src/lib/sovereign.ts";
 
 const publicIdentity: Identity = {
@@ -60,13 +59,11 @@ test("does not downgrade invalid supplied credentials to public access", () => {
   );
 });
 
-test("ignores caller-controlled tenant headers for unauthenticated identities", async () => {
-  const identity = await resolveIdentity(
-    request("GET", "/health", { "X-Aston-Tenant": "victim-tenant" }),
-    {} as any
-  );
+test("anonymous identity is fixed and cannot be selected by a tenant header", () => {
+  const identity = anonymousIdentity();
   assert.equal(identity.method, "public");
   assert.equal(identity.tenant, "public");
+  assert.equal(identity.plan, "free");
 });
 
 test("does not accept a client-supplied plan upgrade", () => {
