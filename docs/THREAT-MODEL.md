@@ -31,11 +31,11 @@ flowchart TD
 | Tenant spoofing | Caller supplies another tenant in X-Aston-Tenant | Anonymous identity uses fixed public tenant; authenticated tenant comes from verified claim | Route-level tenant scoping and existing data need integration tests |
 | Privilege escalation | Caller selects X-Aston-Plan: gov or writes as viewer | Plan derives from trusted claim/server role; protected writes require admin/executor | Access custom roles and Cloudflare policy need account review |
 | Forged identity | Expired JWT, wrong audience, forged signature | RS256, issuer, signature, exp/nbf and configured audience checks | JWKS rotation/cache and negative JWT vectors need further tests |
-| Unauthorized data access | Anonymous reads audit or tenant records | Private GET routes require identity | Verify every endpoint and downstream tenant filter |
+| Unauthorized data access | Anonymous reads audit or tenant records; Access user lacks tenant claim | Private GET routes require identity; missing/invalid Access tenant claims receive an actor-specific unassigned tenant rather than shared default | Configure explicit tenant claims for organization collaboration and verify every downstream tenant filter |
 | Unauthorized mutation | Anonymous/viewer changes policy, agents or infrastructure | Explicit public POST allowlist; other writes require privileged identity | Review allowlist whenever routes change |
 | Secret disclosure | API key appears in logs or repository | Gitleaks; API key actor label uses SHA-256 fingerprint; runtime secret storage | Audit all logs, CI artifacts, Cloudflare secrets and history |
 | Prompt injection / unsafe output | User content manipulates agents or leaks credentials | Staging SafetyInterlock and narrow credential-pattern output guard | Not semantic prompt-injection detection or complete DLP |
-| Resource exhaustion | Unbounded public AI calls or large bodies | Endpoint-specific bounds and staging audit quotas | Global streaming body limits, per-tenant rate limits and abuse monitoring remain open |
+| Resource exhaustion | Unbounded public AI calls, chunked oversized bodies, or repeated API requests | Streamed plan-based body limits; per-IP and per-tenant fixed-window Durable Object limits; tighter public chat quotas | Tune thresholds from production telemetry and add Cloudflare edge-level volumetric protection |
 | Staging contamination | Staging points at production bindings | Separate staging Wrangler config and dry-run workflow | Verify live Workers Builds settings, secrets, routes and bindings before deploy |
 | Supply-chain compromise | Vulnerable npm package or workflow action | Dependabot, Gitleaks, npm audit and existing pinned Actions | SLSA provenance, SBOM and action-pin review remain open |
 
