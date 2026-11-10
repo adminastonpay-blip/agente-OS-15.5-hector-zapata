@@ -63,6 +63,13 @@ Status definitions: **Partial** = some evidence exists but required proof remain
 - Placeholder account validation no longer reports arbitrary account IDs as valid.
 - Regression tests cover access boundaries and tenant/plan spoofing.
 
+## Phase 3 evidence — Zero Trust audit assurance
+
+- SafetyInterlock now appends agent policy decisions and human approval outcomes to tenant-scoped SHA-256 hash chains.
+- SQLite triggers reject UPDATE/DELETE against audit events; a unique tenant/previous-hash key prevents chain forks.
+- An internal Durable Object verification endpoint checks each tenant chain; automated tests cover intact chains, altered records, broken links, and tenant separation.
+- This is repository/code evidence only. It does not provide external WORM storage, independent key custody, retention guarantees, or protection against a privileged operator replacing the entire Durable Object database.
+
 ## Release decision
 
 **Not MVSP-conformant yet.** This is a gap-tracked baseline awaiting CI and account-level evidence. External penetration testing, business controls, provider evidence, MFA/access reviews, SLSA provenance, full logging/retention, and disaster-recovery testing remain open. Do not present this as a customer security certification.
