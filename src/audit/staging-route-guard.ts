@@ -1,4 +1,4 @@
-const STAGING_ALLOWED_PATHS = new Set(["/", "/health", "/v1/audit-target"]);
+const STAGING_ALLOWED_PATHS = new Set(["/", "/health", "/v1/audit-target", "/v1/audit/anchor/verify"]);
 
 /**
  * Restrict the isolated audit Worker to its health and authenticated audit
