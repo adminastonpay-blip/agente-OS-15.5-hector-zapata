@@ -214,6 +214,10 @@ export async function persistIncident(env: Env, incident: Incident): Promise<voi
       console.error("[DEFENSE_D1]", String(e));
     }
   }
+  if (!env.SESSION) {
+    console.error("[DEFENSE_DO] SESSION binding unavailable; incident remains unpersisted outside D1");
+    return;
+  }
   try {
     const stub = env.SESSION.get(
       env.SESSION.idFromName(tenantKey({ tenant: incident.tenant } as Identity, "defense"))
@@ -261,6 +265,7 @@ export async function listIncidents(env: Env, identity: Identity): Promise<Incid
       /* fall */
     }
   }
+  if (!env.SESSION) return [];
   try {
     const stub = env.SESSION.get(
       env.SESSION.idFromName(tenantKey(identity, "defense"))
