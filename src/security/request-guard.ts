@@ -95,6 +95,8 @@ export async function checkRequestRateLimit(
   const policy = rateLimitPolicy(path, method, identity);
   const keys = ["ip:" + (clientIp || "unknown") + ":" + policy.bucket];
   if (identity.method !== "public") keys.push("tenant:" + identity.tenant + ":" + policy.bucket);
+  let remaining = policy.limit;
+  let resetAt = Date.now() + policy.windowMs;
   for (const key of keys) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
     const id = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -107,8 +109,10 @@ export async function checkRequestRateLimit(
       const result = await response.json<{ allowed: boolean; remaining: number; reset_at: number }>().catch(() => null);
       if (response.status === 429 && result) return { allowed: false, remaining: 0, resetAt: result.reset_at };
       if (!response.ok || !result) return { allowed: false, unavailable: true };
+      remaining = Math.min(remaining, result.remaining);
+      resetAt = Math.max(resetAt, result.reset_at);
       if (!result.allowed) return { allowed: false, remaining: 0, resetAt: result.reset_at };
     } catch { return { allowed: false, unavailable: true }; }
   }
-  return { allowed: true, remaining: policy.limit, resetAt: Date.now() + policy.windowMs };
+  return { allowed: true, remaining, resetAt };
 }
