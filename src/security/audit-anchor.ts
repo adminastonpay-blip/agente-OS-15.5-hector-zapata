@@ -62,7 +62,11 @@ export async function verifyExternalOtsAnchor(
            { ok: false; confirmed: false; reason: string }> {
   const manifest = await bucket.get(checkpointKey);
   if (!manifest) return { ok: false, confirmed: false, reason: "checkpoint_not_found" };
-  const checkpoint = await manifest.json<AuditCheckpoint>();
+  const manifestBytes = new Uint8Array(await manifest.arrayBuffer());
+  const manifestText = new TextDecoder().decode(manifestBytes);
+  let checkpoint: AuditCheckpoint;
+  try { checkpoint = JSON.parse(manifestText) as AuditCheckpoint; }
+  catch { return { ok: false, confirmed: false, reason: "checkpoint_invalid_json" }; }
   if (checkpoint.schema !== "aston.audit.checkpoint.v1" ||
       checkpoint.root_hash !== expectedRootHash ||
       !/^[a-f0-9]{64}$/.test(checkpoint.root_hash)) {
@@ -83,6 +87,7 @@ export async function verifyExternalOtsAnchor(
     body: JSON.stringify({
       algorithm: "opentimestamps-bitcoin",
       checkpoint,
+      manifest_base64: btoa(manifestText),
       proof_base64: proofBase64,
     }),
   });
