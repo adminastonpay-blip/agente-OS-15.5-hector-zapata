@@ -153,6 +153,14 @@ export class SafetyInterlock {
       }
       return Response.json({ status: "claimed", run_id: body.run_id, case_id: body.case_id });
     }
+    if (u.pathname === "/audit/verify" && req.method === "GET") {
+      const tenant = u.searchParams.get("tenant") || "";
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tenant)) return Response.json({ error: "invalid_tenant" }, { status: 400 });
+      const rows = this.sql.exec("SELECT record_json, previous_hash, event_hash FROM audit_events WHERE tenant = ? ORDER BY id ASC", tenant).toArray() as Array<{ record_json: string; previous_hash: string; event_hash: string }>;
+      const intact = await verifyAuditChain(rows.map((row) => ({ record: row.record_json, previousHash: row.previous_hash, hash: row.event_hash })));
+      return Response.json({ tenant, intact, events: rows.length });
+    }
+
     if (u.pathname === "/evaluate" && req.method === "POST") {
       const body = await req.json<{ action: ProposedAction; identity: Identity }>();
       return Response.json(await this.evaluateAndGate(body.action, body.identity));
