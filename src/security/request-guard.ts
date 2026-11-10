@@ -104,8 +104,9 @@ export async function checkRequestRateLimit(
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ limit: policy.limit, window_ms: policy.windowMs }),
       });
-      if (!response.ok) return { allowed: false, unavailable: true };
-      const result = await response.json<{ allowed: boolean; remaining: number; reset_at: number }>();
+      const result = await response.json<{ allowed: boolean; remaining: number; reset_at: number }>().catch(() => null);
+      if (response.status === 429 && result) return { allowed: false, remaining: 0, resetAt: result.reset_at };
+      if (!response.ok || !result) return { allowed: false, unavailable: true };
       if (!result.allowed) return { allowed: false, remaining: 0, resetAt: result.reset_at };
     } catch { return { allowed: false, unavailable: true }; }
   }
