@@ -28,6 +28,7 @@ import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
 import { handleStagingAudit } from "./audit/staging-endpoint";
 import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
+import { authorizeApiRequest } from "./security/mvsp-access";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -49,10 +50,23 @@ const CORS: Record<string, string> = {
     "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Sensor-Key,X-Payment,X-402-Payment,X-Aston-Free,X-Require-Payment",
 };
 
+const SECURITY_HEADERS: Record<string, string> = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Strict-Transport-Security": "max-age=31536000",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+};
+
 const json = (d: unknown, s = 200) =>
   new Response(JSON.stringify(d), {
     status: s,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...CORS },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...CORS,
+      ...SECURITY_HEADERS,
+    },
   });
 
 const SYSTEM_CHAT =
@@ -384,6 +398,10 @@ export default {
     const auditResponse = await handleStagingAudit(req, env, handleChat);
     if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
+    const access = authorizeApiRequest(req, path, identity);
+    if (!access.allowed) {
+      return json({ ok: false, error: access.error }, access.status);
+    }
 
     const cl = Number(req.headers.get("content-length") || 0);
     if (cl > 0) {
@@ -477,14 +495,15 @@ export default {
         (typeof body.id === "string" && body.id.trim()) ||
         "";
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
+      // Do not claim an account is active until a trusted billing/identity
+      // provider is configured and its response is verified.
       return json({
-        ok: true,
-        valid: true,
+        ok: false,
+        valid: false,
         account_id: accountId,
-        plan: "free",
-        status: "active",
+        error: "account_validation_not_configured",
         version: VERSION,
-      });
+      }, 503);
     }
 
     const risk = await handleRisk(path, req, env, identity, json);
