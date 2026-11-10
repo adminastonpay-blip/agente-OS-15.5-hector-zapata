@@ -70,6 +70,13 @@ Status definitions: **Partial** = some evidence exists but required proof remain
 - An internal Durable Object verification endpoint checks each tenant chain; automated tests cover intact chains, altered records, broken links, and tenant separation.
 - This is repository/code evidence only. It does not provide external WORM storage, independent key custody, retention guarantees, or protection against a privileged operator replacing the entire Durable Object database.
 
+## Phase 3 external anchor extension — implementation vs deployment
+
+- **Implemented in repository:** R2 checkpoint writer, 100-event/hourly Durable Object checkpoint schedule, content-addressed object keys, scheduled OpenTimestamps stamp/upgrade script, authenticated Worker verification route, verifier service-binding contract, and regression tests.
+- **Not yet configured/validated live:** R2 bucket, indefinite bucket-lock rules, `AUDIT_ARCHIVE` binding, GitHub R2 secrets, dedicated `OTS_VERIFIER` service, confirmed Bitcoin receipt, and Trust Fabric → ASTON OS Staging service-binding E2E.
+- CI can validate TypeScript, unit tests, shell syntax, and Wrangler dry-run. It cannot prove account-level R2 retention or Bitcoin confirmation without the live credentials and deployed verifier.
+- The endpoint returns 503 when the verifier is unavailable or a receipt is pending; it never labels a pending proof as Bitcoin-confirmed.
+
 ## Release decision
 
 **Not MVSP-conformant yet.** This is a gap-tracked baseline awaiting CI and account-level evidence. External penetration testing, business controls, provider evidence, MFA/access reviews, SLSA provenance, full logging/retention, and disaster-recovery testing remain open. Do not present this as a customer security certification.
