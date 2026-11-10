@@ -259,7 +259,7 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
         : lang.startsWith("en")
           ? "@cf/deepgram/aura-2-en"
           : "@cf/deepgram/aura-2-es";
-    const { binary, model, raw } = await runTts(env, text, preferred);
+    const { binary, model, raw } = await runTts(env as Env & { AI: Ai }, text, preferred);
     if (binary) {
       return new Response(binary, {
         status: 200,
@@ -289,7 +289,7 @@ async function handleVoice(req: Request, env: Env): Promise<Response> {
     const spoken = applyVoicePersonality(text, profile.pace);
     const preferred =
       typeof body.model === "string" && body.model.startsWith("@cf/") ? body.model : profile.model;
-    const { binary, model, raw } = await runTts(env, spoken, preferred);
+    const { binary, model, raw } = await runTts(env as Env & { AI: Ai }, spoken, preferred);
     if (binary && body.format !== "json") {
       return new Response(binary, {
         status: 200,
