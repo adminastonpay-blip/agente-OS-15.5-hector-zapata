@@ -79,3 +79,35 @@ export function rateLimitPolicy(path: string, method: string, identity: Identity
     windowMs: 60_000,
   };
 }
+
+import type { Env } from "../types";
+
+export type RateLimitResult =
+  | { allowed: true; remaining: number; resetAt: number }
+  | { allowed: false; remaining: 0; resetAt: number }
+  | { allowed: false; unavailable: true };
+
+/** Enforce per-client and (for authenticated users) per-tenant fixed-window limits in a DO. */
+export async function checkRequestRateLimit(
+  env: Env, identity: Identity, path: string, method: string, clientIp: string | null
+): Promise<RateLimitResult> {
+  if (!env.SAFETY) return { allowed: false, unavailable: true };
+  const policy = rateLimitPolicy(path, method, identity);
+  const keys = ["ip:" + (clientIp || "unknown") + ":" + policy.bucket];
+  if (identity.method !== "public") keys.push("tenant:" + identity.tenant + ":" + policy.bucket);
+  for (const key of keys) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+    const id = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    try {
+      const stub = env.SAFETY.get(env.SAFETY.idFromName("rate-" + id));
+      const response = await stub.fetch("https://rate-limit/check", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ limit: policy.limit, window_ms: policy.windowMs }),
+      });
+      if (!response.ok) return { allowed: false, unavailable: true };
+      const result = await response.json<{ allowed: boolean; remaining: number; reset_at: number }>();
+      if (!result.allowed) return { allowed: false, remaining: 0, resetAt: result.reset_at };
+    } catch { return { allowed: false, unavailable: true }; }
+  }
+  return { allowed: true, remaining: policy.limit, resetAt: Date.now() + policy.windowMs };
+}
