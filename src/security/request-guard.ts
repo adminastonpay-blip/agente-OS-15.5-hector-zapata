@@ -59,7 +59,7 @@ export async function enforceRequestBodyLimit(
   return { request: replayable, result: { ok: true, limit } };
 }
 
-export type RateLimitClass = "chat" | "public" | "authenticated";
+export type RateLimitClass = "chat" | "public" | "authenticated-read" | "authenticated-write";
 
 export function rateLimitPolicy(path: string, method: string, identity: Identity): {
   bucket: RateLimitClass;
@@ -74,7 +74,7 @@ export function rateLimitPolicy(path: string, method: string, identity: Identity
     return { bucket: "public", limit: 30, windowMs: 60_000 };
   }
   return {
-    bucket: "authenticated",
+    bucket: verb === "GET" || verb === "HEAD" ? "authenticated-read" : "authenticated-write",
     limit: verb === "GET" || verb === "HEAD" ? 120 : 40,
     windowMs: 60_000,
   };
