@@ -17,8 +17,10 @@ function extractText(out: any): string {
 }
 
 export async function embed(env: Env, texts: string[]): Promise<number[][]> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   try {
-    const res = (await env.AI.run(
+    const res = (await ai.run(
       env.EMBED_MODEL as any,
       { text: texts } as any,
       env.AI_GATEWAY_ID ? ({ gateway: { id: env.AI_GATEWAY_ID } } as any) : undefined
@@ -35,6 +37,8 @@ export async function chat(
   messages: any[],
   opts?: { max_tokens?: number; temp?: number }
 ): Promise<{ response: string; model: string }> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
   const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
   let lastErr = "";
@@ -78,6 +82,8 @@ export async function chatStream(
   messages: any[],
   opts?: { max_tokens?: number; temp?: number }
 ): Promise<{ stream: ReadableStream; model: string; mode: "native" | "chunked" }> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
   const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
   const inputBase = {
