@@ -399,11 +399,6 @@ export default {
     const auditResponse = await handleStagingAudit(req, env, handleChat);
     if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
-    const access = authorizeApiRequest(req, path, identity);
-    if (!access.allowed) {
-      return json({ ok: false, error: access.error }, access.status);
-    }
-
     const rate = await checkRequestRateLimit(
       env,
       identity,
@@ -427,6 +422,11 @@ export default {
       return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
     }
     req = bounded.request;
+
+    const access = authorizeApiRequest(req, path, identity);
+    if (!access.allowed) {
+      return json({ ok: false, error: access.error }, access.status);
+    }
 
     if (path === "/" || path === "/health") {
       return json({
