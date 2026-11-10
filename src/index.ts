@@ -29,6 +29,7 @@ import { handleStagingAudit } from "./audit/staging-endpoint";
 import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
+import { checkRequestRateLimit, enforceRequestBodyLimit } from "./security/request-guard";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -403,15 +404,29 @@ export default {
       return json({ ok: false, error: access.error }, access.status);
     }
 
-    const cl = Number(req.headers.get("content-length") || 0);
-    if (cl > 0) {
-      const gate = enforceTenantBodyLimit(
-        identity,
-        cl,
-        planFromIdentity(identity, req.headers.get("X-Aston-Plan"))
-      );
-      if (!gate.ok) return json({ ok: false, error: gate.error, limit: gate.limit }, 413);
+    const rate = await checkRequestRateLimit(
+      env,
+      identity,
+      path,
+      req.method,
+      req.headers.get("CF-Connecting-IP")
+    );
+    if ("unavailable" in rate) {
+      return json({ ok: false, error: "rate_limit_service_unavailable" }, 503);
     }
+    if (!rate.allowed) {
+      const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000));
+      return new Response(JSON.stringify({ ok: false, error: "rate_limit_exceeded", retry_after_seconds: retryAfter }), {
+        status: 429,
+        headers: { "Content-Type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS, "Retry-After": String(retryAfter) },
+      });
+    }
+
+    const bounded = await enforceRequestBodyLimit(req, identity);
+    if (!bounded.result.ok) {
+      return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
+    }
+    req = bounded.request;
 
     if (path === "/" || path === "/health") {
       return json({
