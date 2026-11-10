@@ -29,7 +29,7 @@ export async function writeImmutableCheckpoint(
       !Number.isSafeInteger(checkpoint.event_count) || checkpoint.event_count < 1) {
     throw new Error("invalid_audit_checkpoint");
   }
-  const key = `audit/anchors/v1/${checkpoint.tenant_hash}/${String(checkpoint.event_count).padStart(12, "0")}-${checkpoint.root_hash}.json`;
+  const key = `evidence/anchors/v1/${checkpoint.tenant_hash}/${String(checkpoint.event_count).padStart(12, "0")}-${checkpoint.root_hash}.json`;
   const body = JSON.stringify(checkpoint);
   const existing = await bucket.head(key);
   if (existing) {
@@ -73,7 +73,7 @@ export async function verifyExternalOtsAnchor(
     return { ok: false, confirmed: false, reason: "checkpoint_root_mismatch" };
   }
   const proofKey = checkpointKey
-    .replace("audit/anchors/v1/", "audit/ots/v1/")
+    .replace("evidence/anchors/v1/", "evidence/ots/v1/")
     .replace(/\.json$/, ".ots");
   const proof = await bucket.get(proofKey);
   if (!proof) return { ok: false, confirmed: false, reason: "ots_proof_pending" };
