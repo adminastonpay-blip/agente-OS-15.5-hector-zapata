@@ -39,6 +39,16 @@ flowchart TD
 | Staging contamination | Staging points at production bindings | Separate staging Wrangler config and dry-run workflow | Verify live Workers Builds settings, secrets, routes and bindings before deploy |
 | Supply-chain compromise | Vulnerable npm package or workflow action | Dependabot, Gitleaks, npm audit and existing pinned Actions | SLSA provenance, SBOM and action-pin review remain open |
 
+## Phase 3 — Zero Trust and continuous assurance
+
+- SafetyInterlock records agent policy decisions and human approval outcomes in a tenant-scoped SHA-256 hash chain.
+- Audit event rows are append-only at the SQLite layer: UPDATE and DELETE triggers abort mutations.
+- Each tenant chain starts at `GENESIS`; a unique `(tenant, previous_hash)` constraint prevents concurrent writers from creating two successors to the same event.
+- `/audit/verify?tenant=...` verifies chain linkage and record hashes and returns only integrity status and event count.
+- Audit payloads deliberately exclude prompts, source code, credentials, and full request bodies; they record tool, decision, risk, score, policy reasons, approval ID, and actor lineage.
+- Hash chaining is tamper-evidence, not an external immutable/WORM backup: an administrator able to replace the entire Durable Object database could rewrite the chain. Export/anchoring and retention remain follow-up controls.
+- The verification route is a Durable Object internal endpoint; it is not an externally routed Worker API endpoint.
+
 ## Assumptions
 
 - Access JWTs are accepted only when team domain and audience are configured.
