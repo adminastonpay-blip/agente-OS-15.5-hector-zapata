@@ -55,7 +55,7 @@ flowchart TD
 - Checkpoint keys include tenant hash, event count, and root hash; exact-content checks prevent accidental reuse of a key with different bytes.
 - The scheduled OpenTimestamps workflow stamps checkpoint bytes, upgrades pending receipts, and publishes a final receipt only after the CLI reports a Bitcoin block confirmation.
 - Runtime verification is delegated to the separately deployed `OTS_VERIFIER` service binding. The Worker fails closed (503) when the R2 receipt or verifier is unavailable and rejects local-root mismatches (409).
-- R2 bucket-lock rules and a restricted R2 binding are operator prerequisites; this repository does not configure account-level bucket locks or credentials.
+- R2 evidence objects use the evidence/ prefix; mutable OTS upgrade proofs stay under pending/ outside the retention scope. The staging Wrangler config binds the dedicated aston-audit-archive bucket, but account-level lock state and credentials still require operator verification.
 - A Cloudflare account administrator may still alter bucket configuration or remove lock rules. Separate duties and retain independent copies of proofs; do not claim protection against compromise of every privileged account.
 - The Trust Fabric service-binding E2E remains pending until its runtime service and the staging binding are configured.
 
