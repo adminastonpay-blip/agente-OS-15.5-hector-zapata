@@ -27,7 +27,7 @@ export async function embed(env: Env, texts: string[]): Promise<number[][]> {
     )) as any;
     return res?.data ?? [];
   } catch {
-    const res = (await env.AI.run(env.EMBED_MODEL as any, { text: texts } as any)) as any;
+    const res = (await ai.run(env.EMBED_MODEL as any, { text: texts } as any)) as any;
     return res?.data ?? [];
   }
 }
@@ -52,7 +52,7 @@ export async function chat(
 
     if (env.AI_GATEWAY_ID) {
       try {
-        const out = (await env.AI.run(model as any, input, {
+        const out = (await ai.run(model as any, input, {
           gateway: { id: env.AI_GATEWAY_ID },
         } as any)) as any;
         const text = extractText(out);
@@ -63,7 +63,7 @@ export async function chat(
     }
 
     try {
-      const out = (await env.AI.run(model as any, input)) as any;
+      const out = (await ai.run(model as any, input)) as any;
       const text = extractText(out);
       if (text) return { response: text, model };
     } catch (e: any) {
@@ -98,14 +98,14 @@ export async function chatStream(
       let out: any;
       if (env.AI_GATEWAY_ID) {
         try {
-          out = await env.AI.run(model as any, inputBase, {
+          out = await ai.run(model as any, inputBase, {
             gateway: { id: env.AI_GATEWAY_ID },
           } as any);
         } catch {
-          out = await env.AI.run(model as any, inputBase);
+          out = await ai.run(model as any, inputBase);
         }
       } else {
-        out = await env.AI.run(model as any, inputBase);
+        out = await ai.run(model as any, inputBase);
       }
 
       if (out && typeof out.getReader === "function") {
