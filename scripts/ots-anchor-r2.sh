@@ -6,6 +6,24 @@ set -euo pipefail
 : "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID}"
 : "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY}"
 
+# Cloudflare R2 endpoint secrets are sometimes saved as a bare hostname.
+# AWS CLI requires an absolute URL; normalize to HTTPS without exposing the value.
+if [[ "$R2_ENDPOINT" == http://* ]]; then
+  echo "R2_ENDPOINT must use HTTPS." >&2
+  exit 2
+elif [[ "$R2_ENDPOINT" != https://* ]]; then
+  R2_ENDPOINT="https://${R2_ENDPOINT#//}"
+fi
+R2_ENDPOINT="${R2_ENDPOINT%/}"
+python - "$R2_ENDPOINT" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+    raise SystemExit("R2_ENDPOINT must be a valid HTTPS endpoint URL.")
+PY
+
 command -v aws >/dev/null || { echo "AWS CLI is required" >&2; exit 2; }
 command -v ots >/dev/null || { echo "opentimestamps-client is required (pip install opentimestamps-client)" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
