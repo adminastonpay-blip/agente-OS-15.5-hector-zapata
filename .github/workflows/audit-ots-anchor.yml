@@ -16,8 +16,23 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: feat/audit-staging-harness-21x
+
       - name: Install OpenTimestamps client
         run: python -m pip install --disable-pip-version-check opentimestamps-client
+
+      # AWS CLI v2 is installed from AWS's official installer.
+      # Ubuntu 24.04 runner repositories do not reliably provide awscli via apt.
+      - name: Install AWS CLI v2 (official installer)
+        run: |
+          curl -fsSL https://awscli.amazonaws.com/v2/install.sh | sudo bash -s -- --system
+          aws --version
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          jq --version
+
       - name: Check R2 credentials
         id: config
         env:
@@ -27,13 +42,19 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ASTON_R2_SECRET_ACCESS_KEY }}
         run: |
           if [[ -z "$R2_ENDPOINT" || -z "$R2_BUCKET" || -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
-            echo "::warning::R2 secrets are not configured; no live timestamp was created."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::error::One or more required R2 secrets are missing; refusing to report a successful audit."
+            exit 1
           fi
+          echo "All four required R2 secrets are present."
+
+      - name: Validate audit script
+        run: |
+          bash -n scripts/ots-anchor-r2.sh
+          command -v aws
+          command -v ots
+          command -v jq
+
       - name: Stamp and upgrade pending R2 checkpoints
-        if: steps.config.outputs.configured == 'true'
         env:
           R2_ENDPOINT: ${{ secrets.ASTON_R2_ENDPOINT }}
           R2_BUCKET: ${{ secrets.ASTON_AUDIT_R2_BUCKET }}
@@ -42,7 +63,4 @@ jobs:
           OTS_BITCOIN_NODE: ${{ secrets.ASTON_OTS_BITCOIN_NODE }}
           AWS_DEFAULT_REGION: auto
         run: |
-          sudo apt-get update
-          sudo apt-get install -y awscli jq
-          bash -n scripts/ots-anchor-r2.sh
           bash scripts/ots-anchor-r2.sh
