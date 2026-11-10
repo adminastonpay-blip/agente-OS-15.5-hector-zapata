@@ -55,6 +55,7 @@ Configure these repository Actions secrets:
 - `ASTON_AUDIT_R2_BUCKET`: actual bucket name
 - `ASTON_R2_ACCESS_KEY_ID`: restricted R2 S3 access key
 - `ASTON_R2_SECRET_ACCESS_KEY`: matching secret
+- `ASTON_OTS_BITCOIN_NODE`: optional authenticated Bitcoin Core JSON-RPC URL (pruned node is sufficient). Without it, the workflow only stamps/upgrades and stores a pending proof; it does not publish a final confirmed receipt.
 
 The R2 credential used by GitHub should have only the minimum bucket access required to list/read checkpoints and write pending/final OTS receipts. It must not have permission to alter bucket lock rules.
 
@@ -76,7 +77,7 @@ The Worker sends `POST /verify` with:
 - `proof_base64`: exact `.ots` receipt bytes
 - `algorithm`: `opentimestamps-bitcoin`
 
-The verifier must independently run a maintained OpenTimestamps verification implementation against Bitcoin headers (not trust the manifest's claimed block number), verify the proof against the exact manifest bytes, and return JSON:
+The verifier must independently run a maintained OpenTimestamps verification implementation against Bitcoin headers using its own Bitcoin Core node (a pruned node is sufficient; do not trust calendar text or a claimed block height), verify the proof against the exact manifest bytes, and return JSON:
 `{ "ok": true, "confirmed": true, "root_hash": "<same root>", "block_height": 900000, "timestamp": 1794300000 }`.
 
 Pending calendar attestations, invalid proofs, mismatched roots, missing block headers, and service errors must never return `confirmed: true`.
