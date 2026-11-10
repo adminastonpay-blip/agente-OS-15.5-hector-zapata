@@ -14,14 +14,15 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
-  --prefix "audit/anchors/v1/" --query 'Contents[].Key' --output json | jq -r '.[]?' > "$tmp/keys.txt"
+  --prefix "evidence/anchors/v1/" --query 'Contents[].Key' --output json | jq -r '.[]?' > "$tmp/keys.txt"
 
 while IFS= read -r key; do
-  [[ "$key" == audit/anchors/v1/*.json ]] || continue
+  [[ "$key" == evidence/anchors/v1/*.json ]] || continue
   name="$(basename "$key" .json)"
-  tenant_path="$(dirname "$key" | sed 's#^audit/anchors/v1/##')"
-  final_key="audit/ots/v1/$tenant_path/$name.ots"
-  pending_key="audit/ots-pending/v1/$tenant_path/$name.ots"
+  tenant_path="$(dirname "$key" | sed 's#^evidence/anchors/v1/##')"
+  final_key="evidence/ots/v1/$tenant_path/$name.ots"
+  # Pending proofs remain upgradeable outside the locked evidence/ prefix.
+  pending_key="pending/ots/v1/$tenant_path/$name.ots"
 
   if aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$final_key" >/dev/null 2>&1; then
     echo "Already Bitcoin-anchored: $final_key"
@@ -54,6 +55,8 @@ while IFS= read -r key; do
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$final_key" \
       --content-type "application/vnd.opentimestamps" 
     echo "Confirmed and stored immutable proof: $final_key"
+    # Pending proof is outside evidence/ and can be removed after confirmation.
+    aws s3 rm --endpoint-url "$R2_ENDPOINT" "s3://$R2_BUCKET/$pending_key" >/dev/null 2>&1 || true
   else
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$pending_key" \
       --content-type "application/vnd.opentimestamps"
