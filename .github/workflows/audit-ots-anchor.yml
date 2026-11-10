@@ -1,5 +1,8 @@
 name: ASTON External Audit Anchor (OpenTimestamps)
 on:
+  push:
+    paths:
+      - .github/workflows/audit-ots-anchor.yml
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
