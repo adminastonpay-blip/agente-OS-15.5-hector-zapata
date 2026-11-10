@@ -14,7 +14,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
-  --prefix "audit/anchors/v1/" --query 'Contents[].Key' --output text > "$tmp/keys.txt"
+  --prefix "audit/anchors/v1/" --query 'Contents[].Key' --output json | jq -r '.[]?' > "$tmp/keys.txt"
 
 while IFS= read -r key; do
   [[ "$key" == audit/anchors/v1/*.json ]] || continue
