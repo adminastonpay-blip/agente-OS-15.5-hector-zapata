@@ -46,7 +46,9 @@ test("applies tighter public chat limits than authenticated chat", () => {
 
 test("uses a separate authenticated read/write rate policy", () => {
   const authenticated = { ...free, method: "access" as const, tenant: "tenant-a" };
+  assert.equal(rateLimitPolicy("/v1/status", "GET", authenticated).bucket, "authenticated-read");
   assert.equal(rateLimitPolicy("/v1/status", "GET", authenticated).limit, 120);
+  assert.equal(rateLimitPolicy("/v1/action", "POST", authenticated).bucket, "authenticated-write");
   assert.equal(rateLimitPolicy("/v1/action", "POST", authenticated).limit, 40);
 });
 
