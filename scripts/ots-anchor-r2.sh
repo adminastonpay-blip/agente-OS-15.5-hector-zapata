@@ -9,6 +9,7 @@ set -euo pipefail
 command -v aws >/dev/null || { echo "AWS CLI is required" >&2; exit 2; }
 command -v ots >/dev/null || { echo "opentimestamps-client is required (pip install opentimestamps-client)" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
+command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 2; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -21,8 +22,9 @@ while IFS= read -r key; do
   name="$(basename "$key" .json)"
   tenant_path="$(dirname "$key" | sed 's#^evidence/anchors/v1/##')"
   final_key="evidence/ots/v1/$tenant_path/$name.ots"
-  # Pending proofs remain upgradeable outside the locked evidence/ prefix.
-  pending_key="pending/ots/v1/$tenant_path/$name.ots"
+  # Bucket-wide indefinite retention makes every object immutable, including pending proofs.
+  # Therefore each upgrade is stored under a new content-addressed key; no pending object is overwritten.
+  pending_prefix="pending/ots/v1/$tenant_path/$name/"
 
   if aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$final_key" >/dev/null 2>&1; then
     echo "Already Bitcoin-anchored: $final_key"
@@ -33,33 +35,37 @@ while IFS= read -r key; do
   proof="$tmp/$name.ots"
   aws s3 cp --endpoint-url "$R2_ENDPOINT" "s3://$R2_BUCKET/$key" "$manifest" >/dev/null
 
-  if aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$pending_key" >/dev/null 2>&1; then
-    aws s3 cp --endpoint-url "$R2_ENDPOINT" "s3://$R2_BUCKET/$pending_key" "$proof" >/dev/null
+  latest_pending="$(aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
+    --prefix "$pending_prefix" --query 'Contents[].Key' --output json | jq -r 'sort | last // empty')"
+
+  if [[ -n "$latest_pending" ]]; then
+    aws s3 cp --endpoint-url "$R2_ENDPOINT" "s3://$R2_BUCKET/$latest_pending" "$proof" >/dev/null
     ots upgrade "$proof" || true
   else
     ots stamp "$manifest"
     mv "$manifest.ots" "$proof"
   fi
 
+  proof_hash="$(sha256sum "$proof" | awk '{print $1}')"
+  pending_key="${pending_prefix}$(date -u +%Y%m%dT%H%M%SZ)-${proof_hash}.ots"
+
   if [[ -z "${OTS_BITCOIN_NODE:-}" ]]; then
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$pending_key" \
       --content-type "application/vnd.opentimestamps"
-    echo "Proof created/upgraded but not independently confirmed: configure OTS_BITCOIN_NODE."
+    echo "Proof stored append-only but not independently confirmed: configure OTS_BITCOIN_NODE."
     continue
   fi
 
   verification="$(ots --bitcoin-node "$OTS_BITCOIN_NODE" verify "$proof" 2>&1 || true)"
-  printf '%s\n' "$verification"
+  printf '%s\\n' "$verification"
 
   if grep -q "Success! Bitcoin block" <<<"$verification"; then
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$final_key" \
-      --content-type "application/vnd.opentimestamps" 
+      --content-type "application/vnd.opentimestamps"
     echo "Confirmed and stored immutable proof: $final_key"
-    # Pending proof is outside evidence/ and can be removed after confirmation.
-    aws s3 rm --endpoint-url "$R2_ENDPOINT" "s3://$R2_BUCKET/$pending_key" >/dev/null 2>&1 || true
   else
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$pending_key" \
       --content-type "application/vnd.opentimestamps"
-    echo "Bitcoin confirmation pending; stored retryable proof: $pending_key"
+    echo "Bitcoin confirmation pending; stored append-only proof: $pending_key"
   fi
 done < "$tmp/keys.txt"
