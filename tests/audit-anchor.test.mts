@@ -44,7 +44,7 @@ test("writes deterministic immutable R2 checkpoint with root metadata", async ()
   const first = await writeImmutableCheckpoint(bucket, checkpoint);
   const second = await writeImmutableCheckpoint(bucket, checkpoint);
   assert.equal(first.key, second.key);
-  assert.match(first.key, /^evidence\\/anchors\\/v1\\//);
+  assert.ok(first.key.startsWith("evidence/anchors/v1/"));
   assert.equal(bucket.objects.size, 1);
   assert.equal(bucket.objects.get(first.key)?.customMetadata.root_hash, checkpoint.root_hash);
 });
