@@ -24,13 +24,18 @@ Cloudflare documents that bucket locks prevent overwriting and deleting matching
 
 Dashboard: R2 > bucket > Settings > Bucket lock rules. Add the two indefinite rules above. Or use Wrangler after reviewing the target bucket:
 
-```bash
-npx wrangler r2 bucket lock add aston-audit-evidence --prefix audit/anchors/ --condition-type Indefinite
-npx wrangler r2 bucket lock add aston-audit-evidence --prefix audit/ots/v1/ --condition-type Indefinite
-npx wrangler r2 bucket lock list aston-audit-evidence
+Cloudflare's API accepts a rule body in this form (replace the account and bucket identifiers; use a token restricted to R2 bucket configuration):
+
+```json
+{
+  "rules": [
+    { "id": "aston-audit-anchors", "enabled": true, "prefix": "audit/anchors/", "condition": { "type": "Indefinite" } },
+    { "id": "aston-audit-ots", "enabled": true, "prefix": "audit/ots/v1/", "condition": { "type": "Indefinite" } }
+  ]
+}
 ```
 
-Check the exact CLI flags supported by the installed Wrangler version before running. Cloudflare's API accepts rules with `condition: { "type": "Indefinite" }`.
+The API operation is `PUT /accounts/{account_id}/r2/buckets/{bucket_name}/lock`. Confirm the saved rules with `npx wrangler r2 bucket lock list <BUCKET_NAME>` before binding the Worker.
 
 After the bucket exists, add the following binding to both `wrangler.staging.toml` and (only after staging acceptance) the production config. Replace the bucket name with the real bucket name; do not copy the example literally:
 
