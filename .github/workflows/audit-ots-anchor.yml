@@ -37,6 +37,7 @@ jobs:
           R2_BUCKET: ${{ secrets.ASTON_AUDIT_R2_BUCKET }}
           AWS_ACCESS_KEY_ID: ${{ secrets.ASTON_R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ASTON_R2_SECRET_ACCESS_KEY }}
+          OTS_BITCOIN_NODE: ${{ secrets.ASTON_OTS_BITCOIN_NODE }}
           AWS_DEFAULT_REGION: auto
         run: |
           sudo apt-get update
