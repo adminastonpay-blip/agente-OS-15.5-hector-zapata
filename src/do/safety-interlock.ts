@@ -155,6 +155,16 @@ export class SafetyInterlock {
       }
       return Response.json({ status: "claimed", run_id: body.run_id, case_id: body.case_id });
     }
+    if (u.pathname === "/audit/append" && req.method === "POST") {
+      const body = await req.json<{ tenant: string; actor: string; event_type: string; payload?: Record<string, unknown> }>().catch(() => null);
+      const allowedEvents = new Set(["agent.plan.created", "agent.plan.rejected", "agent.plan.approved", "agent.plan.rejected_by_human", "agent.action.executed", "agent.action.blocked"]);
+      if (!body || !/^[a-zA-Z0-9_-]{1,64}$/.test(body.tenant) || typeof body.actor !== "string" || !body.actor || body.actor.length > 128 || !allowedEvents.has(body.event_type) || !body.payload || typeof body.payload !== "object" || Array.isArray(body.payload)) {
+        return Response.json({ ok: false, error: "invalid_audit_event" }, { status: 400 });
+      }
+      await this.appendAuditEvent(body.tenant, body.actor, body.event_type, body.payload);
+      return Response.json({ ok: true, recorded: true });
+    }
+
     if (u.pathname === "/audit/anchor/verify" && req.method === "POST") {
       if (!this.env.AUDIT_ARCHIVE || !this.env.OTS_VERIFIER) return Response.json({ ok: false, error: "external_anchor_verification_unavailable" }, { status: 503 });
       const body = await req.json<{ tenant: string; event_count: number }>().catch(() => null);
