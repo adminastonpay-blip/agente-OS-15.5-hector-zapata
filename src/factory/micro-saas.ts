@@ -145,6 +145,7 @@ export async function generateMicroTool(
 }
 
 async function factoryStub(env: Env, identity: Identity) {
+  if (!env.SESSION) throw new Error("SESSION binding not configured and D1 persistence unavailable");
   return env.SESSION.get(env.SESSION.idFromName(tenantKey(identity, "factory")));
 }
 
