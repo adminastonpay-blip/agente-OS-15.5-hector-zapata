@@ -58,6 +58,12 @@ export class SafetyInterlock {
       )
     `);
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS request_rate_windows (
+        window_start INTEGER PRIMARY KEY,
+        request_count INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS audit_rate_windows (
         window_start INTEGER PRIMARY KEY,
         request_count INTEGER NOT NULL
@@ -67,6 +73,24 @@ export class SafetyInterlock {
 
   async fetch(req: Request): Promise<Response> {
     const u = new URL(req.url);
+
+    if (u.pathname === "/rate-limit/check" && req.method === "POST") {
+      const body = await req.json<{ limit: number; window_ms: number }>().catch(() => null);
+      if (!body || !Number.isInteger(body.limit) || body.limit < 1 || body.limit > 10000 ||
+          !Number.isInteger(body.window_ms) || body.window_ms < 1000 || body.window_ms > 3600000) {
+        return Response.json({ error: "invalid_rate_limit_policy" }, { status: 400 });
+      }
+      const now = Date.now();
+      const windowStart = Math.floor(now / body.window_ms) * body.window_ms;
+      this.sql.exec("DELETE FROM request_rate_windows WHERE window_start < ?", now - 3600000);
+      this.sql.exec(`INSERT INTO request_rate_windows (window_start, request_count)
+        VALUES (?, 1) ON CONFLICT(window_start) DO UPDATE SET request_count = request_count + 1`, windowStart);
+      const count = Number((this.sql.exec("SELECT request_count FROM request_rate_windows WHERE window_start = ?", windowStart)
+        .toArray()[0] as any)?.request_count ?? 0);
+      const allowed = count <= body.limit;
+      return Response.json({ allowed, remaining: Math.max(0, body.limit - count),
+        reset_at: windowStart + body.window_ms }, { status: allowed ? 200 : 429 });
+    }
 
     if (u.pathname === "/audit/claim" && req.method === "POST") {
       const body = await req.json<{ run_id: string; case_id: string }>().catch(() => null);
