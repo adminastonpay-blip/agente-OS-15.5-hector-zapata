@@ -51,6 +51,17 @@ export class SafetyInterlock {
       )
     `);
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL, tenant TEXT NOT NULL, actor TEXT NOT NULL,
+        event_type TEXT NOT NULL, record_json TEXT NOT NULL,
+        previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL,
+        UNIQUE (tenant, previous_hash)
+      )
+    `);
+    this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
+    this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS audit_claims (
         run_id TEXT NOT NULL,
         case_id TEXT NOT NULL,
