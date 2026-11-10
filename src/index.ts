@@ -24,7 +24,7 @@ import { handleInfra } from "./routes/infra";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
-import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
+
 import { handleStagingAudit } from "./audit/staging-endpoint";
 import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
