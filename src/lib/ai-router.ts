@@ -34,12 +34,14 @@ export async function runRouted(
   profile: RouteProfile,
   input: Record<string, unknown>
 ): Promise<{ model: string; out: any; via: "gateway" | "direct" }> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   const models = modelsFor(env, profile);
   let lastErr = "";
   for (const model of models) {
     if (env.AI_GATEWAY_ID) {
       try {
-        const out = await env.AI.run(model as any, input as any, {
+        const out = await ai.run(model as any, input as any, {
           gateway: { id: env.AI_GATEWAY_ID },
         } as any);
         return { model, out, via: "gateway" };
