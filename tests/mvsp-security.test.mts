@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Identity } from "../src/types";
-import { anonymousIdentity, authorizeApiRequest } from "../src/security/mvsp-access.ts";
-import { planFromIdentity } from "../src/lib/sovereign.ts";
+import { anonymousIdentity, authorizeApiRequest, planFromTrustedIdentity } from "../src/security/mvsp-access.ts";
 
 const publicIdentity: Identity = {
   actor: "public", method: "public", tenant: "public",
@@ -67,7 +66,7 @@ test("anonymous identity is fixed and cannot be selected by a tenant header", ()
 });
 
 test("does not accept a client-supplied plan upgrade", () => {
-  assert.equal(planFromIdentity(publicIdentity, "gov"), "free");
-  assert.equal(planFromIdentity(viewer, "sovereign"), "free");
-  assert.equal(planFromIdentity({ ...viewer, plan: "pro" }, "gov"), "pro");
+  assert.equal(planFromTrustedIdentity(publicIdentity), "free");
+  assert.equal(planFromTrustedIdentity(viewer), "free");
+  assert.equal(planFromTrustedIdentity({ ...viewer, plan: "pro" }), "pro");
 });
