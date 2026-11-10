@@ -50,7 +50,7 @@ export async function runRouted(
       }
     }
     try {
-      const out = await env.AI.run(model as any, input as any);
+      const out = await ai.run(model as any, input as any);
       return { model, out, via: "direct" };
     } catch (e: any) {
       lastErr = String(e?.message || e);
