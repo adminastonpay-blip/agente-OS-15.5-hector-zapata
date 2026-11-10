@@ -17,12 +17,12 @@ The Worker verification endpoint delegates cryptographic OpenTimestamps/Bitcoin-
 Create a dedicated bucket, for example `aston-audit-evidence`. Do not reuse the general journal bucket. Then configure Bucket Lock rules before enabling the integration:
 
 - Prefix `audit/anchors/`: indefinite retention.
-- Prefix `audit/ots/v1/`: indefinite retention.
+- Prefix `evidence/ots/v1/`: indefinite retention.
 - Do not lock `audit/ots-pending/`; pending proofs must be upgradeable until Bitcoin confirms them.
 
 Cloudflare documents that bucket locks prevent overwriting and deleting matching objects, including by lifecycle rules, once the rule is active. A bucket administrator can still change bucket configuration, so separate the lock-policy administrator from the Worker and GitHub credentials. Object Lock is not a defense against compromise of every privileged Cloudflare account.
 
-Dashboard: R2 > bucket > Settings > Bucket lock rules. Add the two indefinite rules above. Or use Wrangler after reviewing the target bucket:
+Dashboard: R2 > aston-audit-archive > Settings > Bucket lock rules. Confirm the enabled rule prefix is exactly `evidence/` and the duration is 2555 days. Check the saved rule before deploying the Worker:
 
 Cloudflare's API accepts a rule body in this form (replace the account and bucket identifiers; use a token restricted to R2 bucket configuration):
 
@@ -30,19 +30,19 @@ Cloudflare's API accepts a rule body in this form (replace the account and bucke
 {
   "rules": [
     { "id": "aston-audit-anchors", "enabled": true, "prefix": "audit/anchors/", "condition": { "type": "Indefinite" } },
-    { "id": "aston-audit-ots", "enabled": true, "prefix": "audit/ots/v1/", "condition": { "type": "Indefinite" } }
+    { "id": "aston-audit-ots", "enabled": true, "prefix": "evidence/ots/v1/", "condition": { "type": "Indefinite" } }
   ]
 }
 ```
 
 The API operation is `PUT /accounts/{account_id}/r2/buckets/{bucket_name}/lock` and replaces the bucket's complete lock-rule set. Read existing rules first and preserve any unrelated rules in the update. Confirm the saved rules with `npx wrangler r2 bucket lock list <BUCKET_NAME>` before binding the Worker.
 
-After the bucket exists, add the following binding to both `wrangler.staging.toml` and (only after staging acceptance) the production config. Replace the bucket name with the real bucket name; do not copy the example literally:
+The staging-only binding is declared in `wrangler.staging.toml`. Do not add it to production until staging acceptance:
 
 ```toml
 [[r2_buckets]]
 binding = "AUDIT_ARCHIVE"
-bucket_name = "aston-audit-evidence"
+bucket_name = "aston-audit-archive"
 ```
 
 Do not set `AUDIT_ANCHOR_REQUIRED = "true"` until the R2 binding, bucket-lock rules, scheduled OTS workflow, and verifier service binding have all been proven in staging. When enabled, missing R2 causes audit writes to fail closed.
@@ -92,11 +92,11 @@ The route returns 503 while the R2 receipt or verifier is unavailable, 404 when 
 
 ## Staging E2E acceptance criteria
 
-1. Create a dedicated staging R2 bucket and activate both lock rules.
+1. Confirm the private staging R2 bucket and enabled `evidence/` 2555-day Bucket Lock rule.
 2. Bind `AUDIT_ARCHIVE` and deploy the dedicated `OTS_VERIFIER` service binding in the staging Worker.
 3. Configure GitHub Actions R2 secrets.
-4. Create 100 governed-agent events in one tenant; confirm a checkpoint object appears under `audit/anchors/v1/`.
-5. Confirm a pending proof appears under `audit/ots-pending/v1/`, then a confirmed receipt under `audit/ots/v1/` after Bitcoin confirmation.
+4. Create 100 governed-agent events in one tenant; confirm a checkpoint object appears under `evidence/anchors/v1/`.
+5. Confirm a mutable pending proof appears under `pending/ots/v1/`, then a confirmed receipt under `evidence/ots/v1/` after Bitcoin confirmation.
 6. Call `POST /v1/audit/anchor/verify` as an authorized operator and require the returned root hash to equal the local checkpoint root and a positive Bitcoin block height.
 7. Tamper with a test copy of the manifest or provide a proof for another root; require verification failure and no allow decision.
 8. Run the Trust Fabric → ASTON OS Staging service-binding test once the Trust Fabric service name and binding are configured.
@@ -105,4 +105,4 @@ The route returns 503 while the R2 receipt or verifier is unavailable, 404 when 
 
 This PR adds the Worker-side R2 checkpoint writer, 100-event/hourly checkpoint schedule, append-only content-addressed object keys, OTS stamping/upgrade workflow, authenticated verification route, and a fail-closed verifier service-binding contract with regression tests.
 
-No live R2 bucket, Bucket Lock rule, Cloudflare binding, GitHub secret, OTS verifier deployment, Bitcoin confirmation, or Trust Fabric service binding is configured by this repository change. Therefore this PR does **not** claim live WORM retention, a confirmed Bitcoin timestamp, or a completed cross-service E2E test. Those are staging acceptance gates, not CI claims.
+The staging config now declares `AUDIT_ARCHIVE` for `aston-audit-archive`; this does not prove a live deployment or the account-side Bucket Lock rule. GitHub R2 secrets, OTS verifier deployment, Bitcoin confirmation, and Trust Fabric service binding still require live configuration and execution. Therefore this PR does **not** claim live WORM retention, a confirmed Bitcoin timestamp, or a completed cross-service E2E test. Those are staging acceptance gates, not CI claims.
