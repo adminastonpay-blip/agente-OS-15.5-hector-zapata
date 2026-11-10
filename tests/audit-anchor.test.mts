@@ -44,6 +44,7 @@ test("writes deterministic immutable R2 checkpoint with root metadata", async ()
   const first = await writeImmutableCheckpoint(bucket, checkpoint);
   const second = await writeImmutableCheckpoint(bucket, checkpoint);
   assert.equal(first.key, second.key);
+  assert.match(first.key, /^evidence\\/anchors\\/v1\\//);
   assert.equal(bucket.objects.size, 1);
   assert.equal(bucket.objects.get(first.key)?.customMetadata.root_hash, checkpoint.root_hash);
 });
@@ -66,7 +67,7 @@ test("fails closed when OTS receipt is absent", async () => {
 test("accepts only a verifier-confirmed proof for the exact root", async () => {
   const bucket = fakeBucket();
   const { key } = await writeImmutableCheckpoint(bucket, checkpoint);
-  const proofKey = key.replace("audit/anchors/v1/", "audit/ots/v1/").replace(/\.json$/, ".ots");
+  const proofKey = key.replace("evidence/anchors/v1/", "evidence/ots/v1/").replace(/\.json$/, ".ots");
   bucket.objects.set(proofKey, { body: "proof-fixture", customMetadata: {} });
   let requestBody: any;
   const verifier = {
@@ -84,7 +85,7 @@ test("accepts only a verifier-confirmed proof for the exact root", async () => {
 test("rejects a verifier response for a different root", async () => {
   const bucket = fakeBucket();
   const { key } = await writeImmutableCheckpoint(bucket, checkpoint);
-  const proofKey = key.replace("audit/anchors/v1/", "audit/ots/v1/").replace(/\.json$/, ".ots");
+  const proofKey = key.replace("evidence/anchors/v1/", "evidence/ots/v1/").replace(/\.json$/, ".ots");
   bucket.objects.set(proofKey, { body: "proof-fixture", customMetadata: {} });
   const verifier = {
     fetch: async () => new Response(JSON.stringify({ ok: true, confirmed: true, root_hash: "d".repeat(64), block_height: 900000 })),
