@@ -21,6 +21,18 @@ const PUBLIC_POST_PATHS = new Set([
   "/v1/validate",
 ]);
 
+export type TrustedTenantPlan = "free" | "pro" | "sovereign" | "gov";
+
+export function planFromTrustedIdentity(identity: Identity): TrustedTenantPlan {
+  if (identity.plan) return identity.plan;
+  if (identity.clearance === "secret" && identity.method !== "public") return "gov";
+  if (
+    identity.method !== "public" &&
+    (identity.roles.includes("admin") || identity.roles.includes("executor"))
+  ) return "sovereign";
+  return "free";
+}
+
 export function anonymousIdentity(): Identity {
   return {
     actor: "public",
