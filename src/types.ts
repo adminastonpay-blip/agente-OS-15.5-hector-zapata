@@ -42,6 +42,8 @@ export interface Identity {
   tenant: string;
   roles: string[];
   clearance: "public" | "internal" | "confidential" | "secret";
+  /** Optional plan asserted by a verified identity provider, never by a request header. */
+  plan?: "free" | "pro" | "sovereign" | "gov";
 }
 
 export interface Mission {
