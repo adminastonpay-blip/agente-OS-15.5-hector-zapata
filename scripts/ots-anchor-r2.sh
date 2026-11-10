@@ -47,7 +47,7 @@ while IFS= read -r key; do
   fi
 
   proof_hash="$(sha256sum "$proof" | awk '{print $1}')"
-  pending_key="${pending_prefix}$(date -u +%Y%m%dT%H%M%SZ)-${proof_hash}.ots"
+  pending_key="${pending_prefix}$(date -u +%Y%m%dT%H%M%S%N)-${proof_hash}.ots"
 
   if [[ -z "${OTS_BITCOIN_NODE:-}" ]]; then
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$pending_key" \
@@ -57,7 +57,7 @@ while IFS= read -r key; do
   fi
 
   verification="$(ots --bitcoin-node "$OTS_BITCOIN_NODE" verify "$proof" 2>&1 || true)"
-  printf '%s\\n' "$verification"
+  printf '%s\n' "$verification"
 
   if grep -q "Success! Bitcoin block" <<<"$verification"; then
     aws s3 cp --endpoint-url "$R2_ENDPOINT" "$proof" "s3://$R2_BUCKET/$final_key" \
