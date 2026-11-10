@@ -14,15 +14,18 @@ if [[ "$R2_ENDPOINT" == http://* ]]; then
 elif [[ "$R2_ENDPOINT" != https://* ]]; then
   R2_ENDPOINT="https://${R2_ENDPOINT#//}"
 fi
-R2_ENDPOINT="${R2_ENDPOINT%/}"
-python - "$R2_ENDPOINT" <<'PY'
+# S3-compatible endpoint URLs must be an origin, not a bucket/object path.
+# Strip accidental path/query fragments copied from a dashboard URL.
+R2_ENDPOINT="$(python - "$R2_ENDPOINT" <<'PY'
 import sys
 from urllib.parse import urlparse
 
 parsed = urlparse(sys.argv[1])
 if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
     raise SystemExit("R2_ENDPOINT must be a valid HTTPS endpoint URL.")
+print(f"{parsed.scheme}://{parsed.netloc}")
 PY
+)"
 
 command -v aws >/dev/null || { echo "AWS CLI is required" >&2; exit 2; }
 command -v ots >/dev/null || { echo "opentimestamps-client is required (pip install opentimestamps-client)" >&2; exit 2; }
