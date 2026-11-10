@@ -73,7 +73,7 @@ Status definitions: **Partial** = some evidence exists but required proof remain
 ## Phase 3 external anchor extension — implementation vs deployment
 
 - **Implemented in repository:** R2 checkpoint writer, 100-event/hourly Durable Object checkpoint schedule, content-addressed object keys, scheduled OpenTimestamps stamp/upgrade script, authenticated Worker verification route, verifier service-binding contract, and regression tests.
-- **Not yet configured/validated live:** R2 bucket, indefinite bucket-lock rules, `AUDIT_ARCHIVE` binding, GitHub R2 secrets, dedicated `OTS_VERIFIER` service, confirmed Bitcoin receipt, and Trust Fabric → ASTON OS Staging service-binding E2E.
+- **Not yet configured/validated live:** R2 bucket, the evidence/ 2555-day bucket-lock rule, `AUDIT_ARCHIVE` binding, GitHub R2 secrets, dedicated `OTS_VERIFIER` service, confirmed Bitcoin receipt, and Trust Fabric → ASTON OS Staging service-binding E2E.
 - CI can validate TypeScript, unit tests, shell syntax, and Wrangler dry-run. It cannot prove account-level R2 retention or Bitcoin confirmation without the live credentials and deployed verifier.
 - The endpoint returns 503 when the verifier is unavailable or a receipt is pending; it never labels a pending proof as Bitcoin-confirmed.
 
