@@ -218,6 +218,26 @@ export class SafetyInterlock {
     return new Response("not found", { status: 404 });
   }
 
+  private async appendAuditEvent(tenant: string, actor: string, eventType: string, payload: Record<string, unknown>): Promise<void> {
+    const ts = Date.now();
+    const record = JSON.stringify({ ts, tenant, actor, event_type: eventType, payload });
+    // The unique tenant/previous_hash key prevents concurrent writers from forking a chain.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const previousHash = String((this.sql.exec(
+        "SELECT event_hash FROM audit_events WHERE tenant = ? ORDER BY id DESC LIMIT 1", tenant
+      ).toArray()[0] as any)?.event_hash ?? "GENESIS");
+      const eventHash = await hashAuditRecord(previousHash, record);
+      try {
+        this.sql.exec("INSERT INTO audit_events (ts, tenant, actor, event_type, record_json, previous_hash, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          ts, tenant, actor, eventType, record, previousHash, eventHash);
+        return;
+      } catch (error) {
+        if (attempt === 7) throw error;
+      }
+    }
+    throw new Error("audit_chain_append_conflict");
+  }
+
   private async evaluateAndGate(action: ProposedAction, identity: Identity) {
     const policy = evaluatePolicy(action, identity);
 
