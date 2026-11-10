@@ -253,6 +253,11 @@ export class SafetyInterlock {
       JSON.stringify(policy.reasons)
     );
 
+    await this.appendAuditEvent(identity.tenant, identity.actor, "agent.policy_decision", {
+      tool: action.tool, decision: policy.decision, risk: policy.risk,
+      score: policy.score, reasons: policy.reasons,
+    });
+
     await emitLineage(this.env, {
       object_id: `safety_${crypto.randomUUID()}`,
       transformation: `safety.${policy.decision}`,
