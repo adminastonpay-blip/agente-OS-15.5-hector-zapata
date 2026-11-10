@@ -77,11 +77,13 @@ Analiza impacto, riesgos y recomendación. Sé breve.`;
 
       let evaluation = "simulation unavailable";
       try {
+        const ai = this.env.AI;
+        if (!ai) throw new Error("AI binding not configured");
         const input = { messages: [{ role: "user", content: prompt }] } as any;
         let r: any;
         if (this.env.AI_GATEWAY_ID) {
           try {
-            r = await this.env.AI.run(this.env.CHAT_MODEL as any, input, {
+            r = await ai.run(this.env.CHAT_MODEL as any, input, {
               gateway: { id: this.env.AI_GATEWAY_ID },
             } as any);
           } catch {
