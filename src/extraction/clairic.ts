@@ -20,8 +20,13 @@ export async function runClairic(
     opts.schema.map((f) => [f.name, { type: f.type, description: f.description ?? "" }])
   );
 
+  if (!env.AI) {
+    return { fields: opts.schema.map((s) => ({ name: s.name, value: null, confidence: 0, p_null: 1 })) };
+  }
+
+  const ai = env.AI;
   try {
-    const res = (await env.AI.run("@cf/cloudflare/clairic" as any, {
+    const res = (await ai.run("@cf/cloudflare/clairic" as any, {
       state: {
         text: opts.text ?? "",
         images: opts.images ?? [],
