@@ -51,14 +51,16 @@ JSON SOLO:
     const secret = this.env.PII_HMAC_SECRET || "aston-edge-default-pii";
     const { masked, vault } = await maskForAgent(prompt, "internal", secret);
     let res: any;
-    try {
-      res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
-        messages: [{ role: "user", content: masked }],
-      } as any);
-    } catch {
-      res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
-        messages: [{ role: "user", content: masked }],
-      } as any);
+    if (this.env.AI) {
+      try {
+        res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
+          messages: [{ role: "user", content: masked }],
+        } as any);
+      } catch (e: any) {
+        res = { response: JSON.stringify({ text: "Workers AI no disponible; se conserva diagnóstico sin recomendación automática.", confidence: 0.2, action: "none", error: String(e?.message || e).slice(0, 120) }) };
+      }
+    } else {
+      res = { response: JSON.stringify({ text: "Workers AI binding no configurado; se conserva diagnóstico sin recomendación automática.", confidence: 0.2, action: "none" }) };
     }
     const textOut =
       typeof res?.response === "string"
