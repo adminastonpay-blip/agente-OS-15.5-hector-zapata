@@ -7,10 +7,15 @@ function timingSafeEqual(a: string, b: string): boolean {
   return d === 0;
 }
 
-function normalizeTenant(value: unknown): string {
-  if (typeof value !== "string") return "default";
+function normalizeTenant(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   const tenant = value.trim();
-  return /^[a-zA-Z0-9_-]{1,64}$/.test(tenant) ? tenant : "default";
+  return /^[a-zA-Z0-9_-]{1,64}$/.test(tenant) ? tenant : null;
+}
+
+/** Missing Access tenant claims must never collapse unrelated users into one shared tenant. */
+export function resolveTenantClaim(value: unknown, actorFingerprint: string): string {
+  return normalizeTenant(value) || `unassigned-${actorFingerprint.slice(0, 32)}`;
 }
 
 function normalizeRoles(value: unknown): string[] {
@@ -84,7 +89,7 @@ export async function authenticate(req: Request, env: Env): Promise<Identity | n
       return {
         actor: email,
         method: "access",
-        tenant: normalizeTenant(p.custom?.tenant),
+        tenant: resolveTenantClaim(p.custom?.tenant, await keyFingerprint(email)),
         roles: normalizeRoles(p.custom?.roles),
         clearance: normalizeClearance(p.custom?.clearance),
         plan: normalizePlan(p.custom?.plan),
