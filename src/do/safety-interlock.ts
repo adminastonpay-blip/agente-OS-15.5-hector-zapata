@@ -342,6 +342,11 @@ export class SafetyInterlock {
       `Human decision by ${operator}`
     );
 
+    const originalIdentity = JSON.parse(row.identity_json) as Identity;
+    await this.appendAuditEvent(originalIdentity.tenant, operator, "approval.decision", {
+      approval_id: approvalId, decision: newStatus, original_actor: originalIdentity.actor,
+    });
+
     await emitLineage(this.env, {
       object_id: approvalId,
       transformation: `safety.human_${newStatus}`,
