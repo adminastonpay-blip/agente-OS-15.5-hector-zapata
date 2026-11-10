@@ -49,6 +49,16 @@ flowchart TD
 - Hash chaining is tamper-evidence, not an external immutable/WORM backup: an administrator able to replace the entire Durable Object database could rewrite the chain. Export/anchoring and retention remain follow-up controls.
 - The verification route is a Durable Object internal endpoint; it is not an externally routed Worker API endpoint.
 
+## External audit anchoring — Phase 3 extension
+
+- Tenant roots are checkpointed to a dedicated R2 bucket after each 100 new events and hourly when activity exists.
+- Checkpoint keys include tenant hash, event count, and root hash; exact-content checks prevent accidental reuse of a key with different bytes.
+- The scheduled OpenTimestamps workflow stamps checkpoint bytes, upgrades pending receipts, and publishes a final receipt only after the CLI reports a Bitcoin block confirmation.
+- Runtime verification is delegated to the separately deployed `OTS_VERIFIER` service binding. The Worker fails closed (503) when the R2 receipt or verifier is unavailable and rejects local-root mismatches (409).
+- R2 bucket-lock rules and a restricted R2 binding are operator prerequisites; this repository does not configure account-level bucket locks or credentials.
+- A Cloudflare account administrator may still alter bucket configuration or remove lock rules. Separate duties and retain independent copies of proofs; do not claim protection against compromise of every privileged account.
+- The Trust Fabric service-binding E2E remains pending until its runtime service and the staging binding are configured.
+
 ## Assumptions
 
 - Access JWTs are accepted only when team domain and audience are configured.
