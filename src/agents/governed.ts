@@ -9,6 +9,19 @@ import {
 } from "../risk/envelope";
 import { defaultEnvelope } from "../risk/arr";
 
+async function appendAgentAudit(env: Env, identity: Identity, eventType: string, payload: Record<string, unknown>): Promise<void> {
+  if (!env.SAFETY) {
+    if (env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_safety_binding_missing");
+    return;
+  }
+  const stub = env.SAFETY.get(env.SAFETY.idFromName("audit:" + identity.tenant));
+  const response = await stub.fetch("https://safety.internal/audit/append", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tenant: identity.tenant, actor: identity.actor, event_type: eventType, payload }),
+  });
+  if (!response.ok && env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_append_failed:" + response.status);
+}
+
 export type GovernedAction = {
   action: string;
   object_type: string;
@@ -75,6 +88,9 @@ export async function createPlan(
         : "pending_approval";
 
   if (riskGate.verdict === "deny") {
+    await appendAgentAudit(env, id, "agent.plan.rejected", {
+      goal: input.goal.slice(0, 160), steps: input.steps.length, reasons: riskGate.reasons,
+    });
     return {
       plan_id: null,
       status: "rejected",
@@ -119,6 +135,11 @@ export async function createPlan(
       )
       .run();
   }
+
+  await appendAgentAudit(env, id, "agent.plan.created", {
+    plan_id: planId, agent_id, steps: input.steps.length, total_exposure: totalExposure,
+    max_exposure: maxExposure, status,
+  });
 
   await emitLineage(env, {
     object_id: planId,
@@ -204,6 +225,10 @@ export async function approvePlan(
   )
     .bind(status, Date.now(), id.tenant, planId)
     .run();
+
+  await appendAgentAudit(env, id, input.approve ? "agent.plan.approved" : "agent.plan.rejected_by_human", {
+    plan_id: planId, decision: status, reason: (input.reason ?? "").slice(0, 160),
+  });
 
   await emitLineage(env, {
     object_id: planId,
@@ -377,6 +402,12 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
   )
     .bind(finalStatus, usedCalls, usedCost, Date.now(), id.tenant, planId)
     .run();
+
+  await appendAgentAudit(env, id, failed ? "agent.action.blocked" : "agent.action.executed", {
+    plan_id: planId, status: finalStatus, used_calls: usedCalls, used_cost: usedCost,
+    used_exposure: cumulativeExposure, failure_reason: failureReason || null,
+    blocked_action_count: riskBlocks.length,
+  });
 
   return {
     plan_id: planId,

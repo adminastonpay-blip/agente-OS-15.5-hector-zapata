@@ -24,7 +24,12 @@ import { handleInfra } from "./routes/infra";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
-import { enforceTenantBodyLimit, planFromIdentity } from "./lib/sovereign";
+
+import { handleStagingAudit } from "./audit/staging-endpoint";
+import { isStagingRouteAllowed } from "./audit/staging-route-guard";
+import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
+import { authorizeApiRequest } from "./security/mvsp-access";
+import { checkRequestRateLimit, enforceRequestBodyLimit } from "./security/request-guard";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -46,10 +51,23 @@ const CORS: Record<string, string> = {
     "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Sensor-Key,X-Payment,X-402-Payment,X-Aston-Free,X-Require-Payment",
 };
 
+const SECURITY_HEADERS: Record<string, string> = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Strict-Transport-Security": "max-age=31536000",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+};
+
 const json = (d: unknown, s = 200) =>
   new Response(JSON.stringify(d), {
     status: s,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...CORS },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...CORS,
+      ...SECURITY_HEADERS,
+    },
   });
 
 const SYSTEM_CHAT =
@@ -110,6 +128,53 @@ async function appendHistory(
   }
 }
 
+
+async function enforceChatSafety(
+  env: Env,
+  message: string,
+  identity: Awaited<ReturnType<typeof resolveIdentity>>
+): Promise<{ ok: true } | { ok: false; status: number; error: string; policy?: unknown }> {
+  // Enforcement is opt-in and staging-only. Production behavior is unchanged unless
+  // an operator explicitly configures this flag in a staging deployment.
+  if (
+    env.CHAT_SAFETY_ENFORCED !== "true" ||
+    !String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")
+  ) return { ok: true };
+  if (!env.SAFETY) return { ok: false, status: 503, error: "chat_safety_binding_unavailable" };
+
+  try {
+    const stub = env.SAFETY.get(env.SAFETY.idFromName("aston-chat-safety"));
+    const response = await stub.fetch("https://do/evaluate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: {
+          tool: "chat_completion",
+          args: { message_length: message.length },
+          context: { objective: "staging chat request" },
+        },
+        identity,
+      }),
+    });
+    const result = await response.json<any>().catch(() => ({}));
+    if (!response.ok || result.status !== "allowed") {
+      return {
+        ok: false,
+        status: response.ok ? 403 : 503,
+        error: result.status === "pending_approval"
+          ? "chat_requires_human_approval"
+          : result.status === "denied"
+            ? "chat_denied_by_safety_policy"
+            : "chat_safety_evaluation_failed",
+        policy: result.policy,
+      };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 503, error: "chat_safety_unavailable" };
+  }
+}
+
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
     if (!env.AI) {
@@ -128,6 +193,9 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
         ? body.session_id.slice(0, 80)
         : "default";
     const useDeep = deep || body.mode === "deep" || body.deep === true;
+    const identity = await resolveIdentity(req, env);
+    const safety = await enforceChatSafety(env, message, identity);
+    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
     const { stub, history } = await loadHistory(env, session_id, body);
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
@@ -136,6 +204,9 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
     ];
     const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
     const answer = out.response || "";
+    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging") && !isOutputSafeForCredentialLeak(answer)) {
+      return json({ ok: false, error: "chat_output_guard_blocked" }, 502);
+    }
     await appendHistory(stub, message, answer);
     const actions =
       body.agent?.actions_enabled || body.client?.agent_runtime ? inferActions(message) : [];
@@ -161,6 +232,9 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
 
 async function handleChatStream(req: Request, env: Env): Promise<Response> {
   try {
+    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")) {
+      return json({ ok: false, error: "stream_disabled_until_buffered_safety_guard_is_implemented" }, 503);
+    }
     if (!env.AI) {
       return json({ ok: false, error: "AI binding not configured" }, 503);
     }
@@ -193,7 +267,10 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
       async start(controller) {
         const send = (event: string, data: unknown) => {
           controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+            encoder.encode(`event: ${event}
+data: ${JSON.stringify(data)}
+
+`)
           );
         };
         send("meta", { ok: true, model, stream_mode: mode, session_id, version: VERSION });
@@ -259,7 +336,7 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
         : lang.startsWith("en")
           ? "@cf/deepgram/aura-2-en"
           : "@cf/deepgram/aura-2-es";
-    const { binary, model, raw } = await runTts(env, text, preferred);
+    const { binary, model, raw } = await runTts({ AI: env.AI }, text, preferred);
     if (binary) {
       return new Response(binary, {
         status: 200,
@@ -289,7 +366,7 @@ async function handleVoice(req: Request, env: Env): Promise<Response> {
     const spoken = applyVoicePersonality(text, profile.pace);
     const preferred =
       typeof body.model === "string" && body.model.startsWith("@cf/") ? body.model : profile.model;
-    const { binary, model, raw } = await runTts(env, spoken, preferred);
+    const { binary, model, raw } = await runTts({ AI: env.AI }, spoken, preferred);
     if (binary && body.format !== "json") {
       return new Response(binary, {
         status: 200,
@@ -316,16 +393,48 @@ export default {
 
     const u = new URL(req.url);
     const path = u.pathname.replace(/\/+$/, "") || "/";
+    if (!isStagingRouteAllowed(env.DEPLOY_PROFILE, path)) {
+      return json({ ok: false, error: "staging_route_disabled" }, 404);
+    }
+    const auditResponse = await handleStagingAudit(req, env, handleChat);
+    if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
+    const rate = await checkRequestRateLimit(
+      env,
+      identity,
+      path,
+      req.method,
+      req.headers.get("CF-Connecting-IP")
+    );
+    if ("unavailable" in rate) {
+      return json({ ok: false, error: "rate_limit_service_unavailable" }, 503);
+    }
+    if (!rate.allowed) {
+      const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000));
+      return new Response(JSON.stringify({ ok: false, error: "rate_limit_exceeded", retry_after_seconds: retryAfter }), {
+        status: 429,
+        headers: { "Content-Type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS, "Retry-After": String(retryAfter) },
+      });
+    }
 
-    const cl = Number(req.headers.get("content-length") || 0);
-    if (cl > 0) {
-      const gate = enforceTenantBodyLimit(
-        identity,
-        cl,
-        planFromIdentity(identity, req.headers.get("X-Aston-Plan"))
-      );
-      if (!gate.ok) return json({ ok: false, error: gate.error, limit: gate.limit }, 413);
+    const bounded = await enforceRequestBodyLimit(req, identity);
+    if (!bounded.result.ok) {
+      return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
+    }
+    req = bounded.request;
+
+    const access = authorizeApiRequest(req, path, identity);
+    if (!access.allowed) {
+      return json({ ok: false, error: access.error }, access.status);
+    }
+
+    if (path === "/v1/audit/anchor/verify" && req.method === "POST") {
+      if (!env.SAFETY) return json({ ok: false, error: "audit_safety_binding_unavailable" }, 503);
+      const body = await req.json<{ event_count: number }>().catch(() => null);
+      if (!body || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return json({ ok: false, error: "invalid_anchor_reference" }, 400);
+      const stub = env.SAFETY.get(env.SAFETY.idFromName("audit:" + identity.tenant));
+      const response = await stub.fetch("https://safety.internal/audit/anchor/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: identity.tenant, event_count: body.event_count }) });
+      return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS } });
     }
 
     if (path === "/" || path === "/health") {
@@ -410,14 +519,15 @@ export default {
         (typeof body.id === "string" && body.id.trim()) ||
         "";
       if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
+      // Do not claim an account is active until a trusted billing/identity
+      // provider is configured and its response is verified.
       return json({
-        ok: true,
-        valid: true,
+        ok: false,
+        valid: false,
         account_id: accountId,
-        plan: "free",
-        status: "active",
+        error: "account_validation_not_configured",
         version: VERSION,
-      });
+      }, 503);
     }
 
     const risk = await handleRisk(path, req, env, identity, json);

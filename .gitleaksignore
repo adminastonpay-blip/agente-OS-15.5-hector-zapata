@@ -1,0 +1,3 @@
+# Exact Gitleaks fingerprint for a synthetic AWS-shaped unit-test fixture.
+# The test now constructs this value at runtime; this entry only suppresses the historical test-line finding.
+f9f1cc46b269485bad00b8179fcf7f30c5b07c7a:tests/chat-output-guard.test.mts:aws-access-token:12

@@ -17,15 +17,17 @@ function extractText(out: any): string {
 }
 
 export async function embed(env: Env, texts: string[]): Promise<number[][]> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   try {
-    const res = (await env.AI.run(
+    const res = (await ai.run(
       env.EMBED_MODEL as any,
       { text: texts } as any,
       env.AI_GATEWAY_ID ? ({ gateway: { id: env.AI_GATEWAY_ID } } as any) : undefined
     )) as any;
     return res?.data ?? [];
   } catch {
-    const res = (await env.AI.run(env.EMBED_MODEL as any, { text: texts } as any)) as any;
+    const res = (await ai.run(env.EMBED_MODEL as any, { text: texts } as any)) as any;
     return res?.data ?? [];
   }
 }
@@ -35,6 +37,8 @@ export async function chat(
   messages: any[],
   opts?: { max_tokens?: number; temp?: number }
 ): Promise<{ response: string; model: string }> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
   const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
   let lastErr = "";
@@ -48,7 +52,7 @@ export async function chat(
 
     if (env.AI_GATEWAY_ID) {
       try {
-        const out = (await env.AI.run(model as any, input, {
+        const out = (await ai.run(model as any, input, {
           gateway: { id: env.AI_GATEWAY_ID },
         } as any)) as any;
         const text = extractText(out);
@@ -59,7 +63,7 @@ export async function chat(
     }
 
     try {
-      const out = (await env.AI.run(model as any, input)) as any;
+      const out = (await ai.run(model as any, input)) as any;
       const text = extractText(out);
       if (text) return { response: text, model };
     } catch (e: any) {
@@ -78,6 +82,8 @@ export async function chatStream(
   messages: any[],
   opts?: { max_tokens?: number; temp?: number }
 ): Promise<{ stream: ReadableStream; model: string; mode: "native" | "chunked" }> {
+  const ai = env.AI;
+  if (!ai) throw new Error("Workers AI binding not configured");
   const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
   const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
   const inputBase = {
@@ -92,14 +98,14 @@ export async function chatStream(
       let out: any;
       if (env.AI_GATEWAY_ID) {
         try {
-          out = await env.AI.run(model as any, inputBase, {
+          out = await ai.run(model as any, inputBase, {
             gateway: { id: env.AI_GATEWAY_ID },
           } as any);
         } catch {
-          out = await env.AI.run(model as any, inputBase);
+          out = await ai.run(model as any, inputBase);
         }
       } else {
-        out = await env.AI.run(model as any, inputBase);
+        out = await ai.run(model as any, inputBase);
       }
 
       if (out && typeof out.getReader === "function") {

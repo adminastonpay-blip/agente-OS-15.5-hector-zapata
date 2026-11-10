@@ -75,20 +75,24 @@ export class SimulationTwin {
 Pregunta: ${question}
 Analiza impacto, riesgos y recomendación. Sé breve.`;
 
+      const ai = this.env.AI;
+      if (!ai) {
+        return Response.json({ error: "Workers AI binding not configured", evaluation: null, deltas: deltas.length }, { status: 503 });
+      }
       let evaluation = "simulation unavailable";
       try {
         const input = { messages: [{ role: "user", content: prompt }] } as any;
         let r: any;
         if (this.env.AI_GATEWAY_ID) {
           try {
-            r = await this.env.AI.run(this.env.CHAT_MODEL as any, input, {
+            r = await ai.run(this.env.CHAT_MODEL as any, input, {
               gateway: { id: this.env.AI_GATEWAY_ID },
             } as any);
           } catch {
-            r = await this.env.AI.run(this.env.CHAT_MODEL as any, input);
+            r = await ai.run(this.env.CHAT_MODEL as any, input);
           }
         } else {
-          r = await this.env.AI.run(this.env.CHAT_MODEL as any, input);
+          r = await ai.run(this.env.CHAT_MODEL as any, input);
         }
         evaluation =
           typeof r?.response === "string"

@@ -145,7 +145,9 @@ export async function generateMicroTool(
 }
 
 async function factoryStub(env: Env, identity: Identity) {
-  return env.SESSION.get(env.SESSION.idFromName(tenantKey(identity, "factory")));
+  const session = env.SESSION;
+  if (!session) throw new Error("SESSION binding not configured");
+  return session.get(session.idFromName(tenantKey(identity, "factory")));
 }
 
 async function persistTool(env: Env, identity: Identity, tool: MicroTool) {
