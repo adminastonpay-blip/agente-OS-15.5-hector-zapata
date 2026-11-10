@@ -35,7 +35,7 @@ Cloudflare's API accepts a rule body in this form (replace the account and bucke
 }
 ```
 
-The API operation is `PUT /accounts/{account_id}/r2/buckets/{bucket_name}/lock`. Confirm the saved rules with `npx wrangler r2 bucket lock list <BUCKET_NAME>` before binding the Worker.
+The API operation is `PUT /accounts/{account_id}/r2/buckets/{bucket_name}/lock` and replaces the bucket's complete lock-rule set. Read existing rules first and preserve any unrelated rules in the update. Confirm the saved rules with `npx wrangler r2 bucket lock list <BUCKET_NAME>` before binding the Worker.
 
 After the bucket exists, add the following binding to both `wrangler.staging.toml` and (only after staging acceptance) the production config. Replace the bucket name with the real bucket name; do not copy the example literally:
 
@@ -55,7 +55,7 @@ Configure these repository Actions secrets:
 - `ASTON_AUDIT_R2_BUCKET`: actual bucket name
 - `ASTON_R2_ACCESS_KEY_ID`: restricted R2 S3 access key
 - `ASTON_R2_SECRET_ACCESS_KEY`: matching secret
-- `ASTON_OTS_BITCOIN_NODE`: optional authenticated Bitcoin Core JSON-RPC URL (pruned node is sufficient). Without it, the workflow only stamps/upgrades and stores a pending proof; it does not publish a final confirmed receipt.
+- `ASTON_OTS_BITCOIN_NODE`: optional authenticated Bitcoin Core JSON-RPC URL (pruned node is sufficient). Without it, the workflow only stamps/upgrades and stores a pending proof; it does not publish a final confirmed receipt. Never expose Bitcoin Core RPC openly to the internet; use a self-hosted runner in the private network or a tightly restricted VPN/tunnel.
 
 The R2 credential used by GitHub should have only the minimum bucket access required to list/read checkpoints and write pending/final OTS receipts. It must not have permission to alter bucket lock rules.
 
