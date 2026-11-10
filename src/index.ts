@@ -428,6 +428,15 @@ export default {
       return json({ ok: false, error: access.error }, access.status);
     }
 
+    if (path === "/v1/audit/anchor/verify" && req.method === "POST") {
+      if (!env.SAFETY) return json({ ok: false, error: "audit_safety_binding_unavailable" }, 503);
+      const body = await req.json<{ event_count: number }>().catch(() => null);
+      if (!body || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return json({ ok: false, error: "invalid_anchor_reference" }, 400);
+      const stub = env.SAFETY.get(env.SAFETY.idFromName("audit:" + identity.tenant));
+      const response = await stub.fetch("https://safety.internal/audit/anchor/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: identity.tenant, event_count: body.event_count }) });
+      return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS } });
+    }
+
     if (path === "/" || path === "/health") {
       return json({
         ok: true,
