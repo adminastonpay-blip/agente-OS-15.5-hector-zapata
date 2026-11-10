@@ -170,7 +170,7 @@ export class SafetyInterlock {
       const body = await req.json<{ tenant: string; event_count: number }>().catch(() => null);
       if (!body || !/^[a-zA-Z0-9_-]{1,64}$/.test(body.tenant) || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return Response.json({ ok: false, error: "invalid_anchor_reference" }, { status: 400 });
       const tenantHash = await sha256Hex(body.tenant);
-      const prefix = "audit/anchors/v1/" + tenantHash + "/" + String(body.event_count).padStart(12, "0") + "-";
+      const prefix = "evidence/anchors/v1/" + tenantHash + "/" + String(body.event_count).padStart(12, "0") + "-";
       const objects = await this.env.AUDIT_ARCHIVE.list({ prefix, limit: 2 });
       if (objects.objects.length !== 1) return Response.json({ ok: false, error: "anchor_not_found_or_ambiguous" }, { status: 404 });
       const objectKey = objects.objects[0].key;
