@@ -96,7 +96,7 @@ The route returns 503 while the R2 receipt or verifier is unavailable, 404 when 
 2. Bind `AUDIT_ARCHIVE` and deploy the dedicated `OTS_VERIFIER` service binding in the staging Worker.
 3. Configure GitHub Actions R2 secrets.
 4. Create 100 governed-agent events in one tenant; confirm a checkpoint object appears under `evidence/anchors/v1/`.
-5. Confirm a mutable pending proof appears under `pending/ots/v1/`, then a confirmed receipt under `evidence/ots/v1/` after Bitcoin confirmation.
+5. Confirm successive pending proof revisions appear under unique keys in `pending/ots/v1/` without overwriting earlier objects, then a confirmed receipt appears under `evidence/ots/v1/` after Bitcoin confirmation.
 6. Call `POST /v1/audit/anchor/verify` as an authorized operator and require the returned root hash to equal the local checkpoint root and a positive Bitcoin block height.
 7. Tamper with a test copy of the manifest or provide a proof for another root; require verification failure and no allow decision.
 8. Run the Trust Fabric → ASTON OS Staging service-binding test once the Trust Fabric service name and binding are configured.
@@ -105,4 +105,4 @@ The route returns 503 while the R2 receipt or verifier is unavailable, 404 when 
 
 This PR adds the Worker-side R2 checkpoint writer, 100-event/hourly checkpoint schedule, append-only content-addressed object keys, OTS stamping/upgrade workflow, authenticated verification route, and a fail-closed verifier service-binding contract with regression tests.
 
-The staging config now declares `AUDIT_ARCHIVE` for `aston-audit-archive`; this does not prove a live deployment or the account-side Bucket Lock rule. GitHub R2 secrets, OTS verifier deployment, Bitcoin confirmation, and Trust Fabric service binding still require live configuration and execution. Therefore this PR does **not** claim live WORM retention, a confirmed Bitcoin timestamp, or a completed cross-service E2E test. Those are staging acceptance gates, not CI claims.
+The staging config declares `AUDIT_ARCHIVE` for `aston-audit-archive`. The operator reports that both the 2555-day `evidence/` rule and bucket-wide indefinite rule are enabled, but this report has not been independently read back through Cloudflare API. The OTS uploader is append-only to accommodate the global rule. GitHub R2 secrets, OTS verifier deployment, Bitcoin confirmation, and Trust Fabric service binding still require live configuration and execution. Therefore this PR does **not** claim live WORM retention, a confirmed Bitcoin timestamp, or a completed cross-service E2E test. Those are staging acceptance gates, not CI claims.
