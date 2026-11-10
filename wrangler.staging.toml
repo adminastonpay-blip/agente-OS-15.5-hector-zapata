@@ -15,6 +15,11 @@ binding = "AI"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
+# Dedicated staging-only evidence bucket. Production config remains unchanged.
+[[r2_buckets]]
+binding = "AUDIT_ARCHIVE"
+bucket_name = "aston-audit-archive"
+
 # The new Worker name gives this staging deployment isolated DO namespaces.
 
 [exports.SafetyInterlock]
