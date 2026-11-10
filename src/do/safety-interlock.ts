@@ -169,11 +169,27 @@ export class SafetyInterlock {
       if (!this.env.AUDIT_ARCHIVE || !this.env.OTS_VERIFIER) return Response.json({ ok: false, error: "external_anchor_verification_unavailable" }, { status: 503 });
       const body = await req.json<{ tenant: string; event_count: number }>().catch(() => null);
       if (!body || !/^[a-zA-Z0-9_-]{1,64}$/.test(body.tenant) || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return Response.json({ ok: false, error: "invalid_anchor_reference" }, { status: 400 });
-      const row = this.sql.exec("SELECT root_hash, object_key FROM audit_anchor_state WHERE tenant = ? AND anchored_count = ?", body.tenant, body.event_count).toArray()[0] as { root_hash: string; object_key: string } | undefined;
-      if (!row) return Response.json({ ok: false, error: "anchor_not_found" }, { status: 404 });
-      const verified = await verifyExternalOtsAnchor(this.env.OTS_VERIFIER, this.env.AUDIT_ARCHIVE, row.object_key, row.root_hash);
+      const tenantHash = await sha256Hex(body.tenant);
+      const prefix = "audit/anchors/v1/" + tenantHash + "/" + String(body.event_count).padStart(12, "0") + "-";
+      const objects = await this.env.AUDIT_ARCHIVE.list({ prefix, limit: 2 });
+      if (objects.objects.length !== 1) return Response.json({ ok: false, error: "anchor_not_found_or_ambiguous" }, { status: 404 });
+      const objectKey = objects.objects[0].key;
+      const manifestObject = await this.env.AUDIT_ARCHIVE.get(objectKey);
+      if (!manifestObject) return Response.json({ ok: false, error: "anchor_manifest_missing" }, { status: 503 });
+      const manifest = await manifestObject.json<{ root_hash: string }>();
+      if (!/^[a-f0-9]{64}$/.test(manifest.root_hash)) return Response.json({ ok: false, integrity: false, error: "anchor_manifest_invalid" }, { status: 409 });
+      const localRoot = this.sql.exec(
+        "SELECT event_hash FROM audit_events WHERE tenant = ? ORDER BY id ASC LIMIT 1 OFFSET ?",
+        body.tenant, body.event_count - 1
+      ).toArray()[0] as { event_hash: string } | undefined;
+      if (localRoot && localRoot.event_hash !== manifest.root_hash) {
+        return Response.json({ ok: false, integrity: false, error: "local_root_mismatch" }, { status: 409 });
+      }
+      const verified = await verifyExternalOtsAnchor(this.env.OTS_VERIFIER, this.env.AUDIT_ARCHIVE, objectKey, manifest.root_hash);
       if (!verified.ok) return Response.json({ ok: false, integrity: false, reason: verified.reason }, { status: 503 });
-      return Response.json({ ok: true, integrity: true, tenant: body.tenant, event_count: body.event_count, root_hash: row.root_hash, bitcoin_block_height: verified.block_height, bitcoin_timestamp: verified.timestamp });
+      return Response.json({ ok: true, integrity: true, local_state_missing: !localRoot,
+        tenant_hash: tenantHash, event_count: body.event_count, root_hash: manifest.root_hash,
+        bitcoin_block_height: verified.block_height, bitcoin_timestamp: verified.timestamp });
     }
 
     if (u.pathname === "/audit/verify" && req.method === "GET") {
