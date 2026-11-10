@@ -21,6 +21,17 @@ const PUBLIC_POST_PATHS = new Set([
   "/v1/validate",
 ]);
 
+export function anonymousIdentity(): Identity {
+  return {
+    actor: "public",
+    method: "public",
+    tenant: "public",
+    roles: ["viewer"],
+    clearance: "public",
+    plan: "free",
+  };
+}
+
 function hasPresentedCredentials(req: Request): boolean {
   return Boolean(
     req.headers.get("Cf-Access-Jwt-Assertion") ||
