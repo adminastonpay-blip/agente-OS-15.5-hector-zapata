@@ -14,6 +14,7 @@ import type { Env, Identity } from "../types";
 import { evaluatePolicy, type ProposedAction, type PolicyResult } from "../safety/policy";
 import { emitLineage } from "../lineage";
 import { hashAuditRecord, verifyAuditChain } from "../security/audit-chain";
+import { sha256Hex, writeImmutableCheckpoint, verifyExternalOtsAnchor } from "../security/audit-anchor";
 
 export class SafetyInterlock {
   private state: DurableObjectState;
@@ -61,6 +62,7 @@ export class SafetyInterlock {
     `);
     this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
     this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS audit_anchor_state (tenant TEXT PRIMARY KEY, anchored_count INTEGER NOT NULL, root_hash TEXT NOT NULL, object_key TEXT NOT NULL, anchored_at INTEGER NOT NULL)`);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS audit_claims (
         run_id TEXT NOT NULL,
@@ -153,6 +155,17 @@ export class SafetyInterlock {
       }
       return Response.json({ status: "claimed", run_id: body.run_id, case_id: body.case_id });
     }
+    if (u.pathname === "/audit/anchor/verify" && req.method === "POST") {
+      if (!this.env.AUDIT_ARCHIVE || !this.env.OTS_VERIFIER) return Response.json({ ok: false, error: "external_anchor_verification_unavailable" }, { status: 503 });
+      const body = await req.json<{ tenant: string; event_count: number }>().catch(() => null);
+      if (!body || !/^[a-zA-Z0-9_-]{1,64}$/.test(body.tenant) || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return Response.json({ ok: false, error: "invalid_anchor_reference" }, { status: 400 });
+      const row = this.sql.exec("SELECT root_hash, object_key FROM audit_anchor_state WHERE tenant = ? AND anchored_count = ?", body.tenant, body.event_count).toArray()[0] as { root_hash: string; object_key: string } | undefined;
+      if (!row) return Response.json({ ok: false, error: "anchor_not_found" }, { status: 404 });
+      const verified = await verifyExternalOtsAnchor(this.env.OTS_VERIFIER, this.env.AUDIT_ARCHIVE, row.object_key, row.root_hash);
+      if (!verified.ok) return Response.json({ ok: false, integrity: false, reason: verified.reason }, { status: 503 });
+      return Response.json({ ok: true, integrity: true, tenant: body.tenant, event_count: body.event_count, root_hash: row.root_hash, bitcoin_block_height: verified.block_height, bitcoin_timestamp: verified.timestamp });
+    }
+
     if (u.pathname === "/audit/verify" && req.method === "GET") {
       const tenant = u.searchParams.get("tenant") || "";
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tenant)) return Response.json({ error: "invalid_tenant" }, { status: 400 });
@@ -219,6 +232,7 @@ export class SafetyInterlock {
   }
 
   private async appendAuditEvent(tenant: string, actor: string, eventType: string, payload: Record<string, unknown>): Promise<void> {
+    if (this.env.AUDIT_ANCHOR_REQUIRED === "true" && !this.env.AUDIT_ARCHIVE) throw new Error("audit_anchor_required_but_r2_binding_missing");
     const ts = Date.now();
     const record = JSON.stringify({ ts, tenant, actor, event_type: eventType, payload });
     // The unique tenant/previous_hash key prevents concurrent writers from forking a chain.
@@ -230,6 +244,14 @@ export class SafetyInterlock {
       try {
         this.sql.exec("INSERT INTO audit_events (ts, tenant, actor, event_type, record_json, previous_hash, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
           ts, tenant, actor, eventType, record, previousHash, eventHash);
+        if (this.env.AUDIT_ARCHIVE) {
+          try {
+            await this.maybeAnchorTenant(tenant, false);
+            if ((await this.state.storage.getAlarm()) === null) await this.state.storage.setAlarm(Date.now() + 3600000);
+          } catch (error) {
+            if (this.env.AUDIT_ANCHOR_REQUIRED === "true") throw error;
+          }
+        }
         return;
       } catch (error) {
         if (attempt === 7) throw error;
@@ -238,6 +260,26 @@ export class SafetyInterlock {
     throw new Error("audit_chain_append_conflict");
   }
 
+  private async maybeAnchorTenant(tenant: string, force: boolean): Promise<void> {
+    const count = Number((this.sql.exec("SELECT COUNT(*) AS count FROM audit_events WHERE tenant = ?", tenant).toArray()[0] as any)?.count ?? 0);
+    const state = this.sql.exec("SELECT anchored_count, root_hash FROM audit_anchor_state WHERE tenant = ?", tenant).toArray()[0] as { anchored_count: number; root_hash: string } | undefined;
+    const anchoredCount = Number(state?.anchored_count ?? 0);
+    if (count <= anchoredCount || (!force && count - anchoredCount < 100)) return;
+    if (!this.env.AUDIT_ARCHIVE) { if (this.env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_archive_binding_missing"); return; }
+    const first = this.sql.exec("SELECT event_hash FROM audit_events WHERE tenant = ? ORDER BY id ASC LIMIT 1", tenant).toArray()[0] as { event_hash: string } | undefined;
+    const last = this.sql.exec("SELECT event_hash, ts FROM audit_events WHERE tenant = ? ORDER BY id DESC LIMIT 1", tenant).toArray()[0] as { event_hash: string; ts: number } | undefined;
+    if (!first || !last) return;
+    const checkpoint = { schema: "aston.audit.checkpoint.v1" as const, tenant_hash: await sha256Hex(tenant), event_count: count, root_hash: last.event_hash, previous_anchor_root: state?.root_hash ?? "GENESIS", first_event_hash: first.event_hash, last_event_hash: last.event_hash, last_event_ts: Number(last.ts), created_at: Date.now() };
+    const written = await writeImmutableCheckpoint(this.env.AUDIT_ARCHIVE, checkpoint);
+    this.sql.exec("INSERT INTO audit_anchor_state (tenant, anchored_count, root_hash, object_key, anchored_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(tenant) DO UPDATE SET anchored_count = excluded.anchored_count, root_hash = excluded.root_hash, object_key = excluded.object_key, anchored_at = excluded.anchored_at", tenant, count, checkpoint.root_hash, written.key, Date.now());
+  }
+
+  async alarm(): Promise<void> {
+    if (!this.env.AUDIT_ARCHIVE) { if (this.env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_archive_binding_missing"); return; }
+    const tenants = this.sql.exec("SELECT DISTINCT tenant FROM audit_events").toArray() as Array<{ tenant: string }>;
+    for (const row of tenants) await this.maybeAnchorTenant(row.tenant, true);
+    await this.state.storage.setAlarm(Date.now() + 3600000);
+  }
   private async evaluateAndGate(action: ProposedAction, identity: Identity) {
     const policy = evaluatePolicy(action, identity);
 
