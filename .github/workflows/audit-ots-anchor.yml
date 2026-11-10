@@ -23,7 +23,7 @@ jobs:
       - name: Install OpenTimestamps client
         run: python -m pip install --disable-pip-version-check opentimestamps-client
 
-      # AWS CLI v2 is installed from AWS's official installer.
+      # AWS CLI v2 is installed from AWS's official installer. The staging script normalizes bare R2 hosts to HTTPS.
       # Ubuntu 24.04 runner repositories do not reliably provide awscli via apt.
       - name: Install AWS CLI v2 (official installer)
         run: |
