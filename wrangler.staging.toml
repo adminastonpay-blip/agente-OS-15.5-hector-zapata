@@ -20,6 +20,11 @@ class_name = "SafetyInterlock"
 binding = "AUDIT_ARCHIVE"
 bucket_name = "aston-audit-archive"
 
+[[services]]
+binding = "OTS_VERIFIER"
+service = "aston-ots-verifier-staging"
+
+# The verifier is a separate staging Worker; deploy it before using this service binding.
 # The new Worker name gives this staging deployment isolated DO namespaces.
 
 [exports.SafetyInterlock]
