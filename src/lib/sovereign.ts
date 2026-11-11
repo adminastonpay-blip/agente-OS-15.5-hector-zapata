@@ -4,6 +4,7 @@
  */
 import type { Env, Identity } from "../types";
 import { pqRuntimeProbe } from "../crypto/pq";
+import { planFromTrustedIdentity } from "../security/mvsp-access";
 
 export type TenantPlan = "free" | "pro" | "sovereign" | "gov";
 
@@ -23,12 +24,9 @@ export function tenantKey(identity: Identity, resource: string): string {
   return `${t}::${resource}`;
 }
 
-export function planFromIdentity(identity: Identity, headerPlan?: string | null): TenantPlan {
-  const p = (headerPlan || "").toLowerCase();
-  if (p === "gov" || p === "sovereign" || p === "pro" || p === "free") return p;
-  if (identity.clearance === "secret") return "gov";
-  if (identity.roles.includes("admin") || identity.method === "apikey") return "sovereign";
-  return "free";
+export function planFromIdentity(identity: Identity, _untrustedHeaderPlan?: string | null): TenantPlan {
+  // Plan upgrades must come from a verified identity-provider claim, never a client header.
+  return planFromTrustedIdentity(identity);
 }
 
 export function enforceTenantBodyLimit(

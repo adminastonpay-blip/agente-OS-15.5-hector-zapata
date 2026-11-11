@@ -1,0 +1,78 @@
+name: OpenTimestamps Bitcoin Proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/audit-staging-harness-21x
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - "wrangler*.toml"
+      - "README.md"
+      - ".github/workflows/bitcoin-ots-stamp.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ots-stamp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stamp:
+    name: Stamp staging branch tip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Check supported Python and install pinned OpenTimestamps tools
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import sys
+          if not ((3, 12) <= sys.version_info[:2] < (3, 15)):
+              raise SystemExit(f"Unsupported Python: {sys.version}")
+          print(sys.version)
+          PY
+          pipx --version
+          pipx install "git+https://github.com/rotheric/git-ots.git@29607ca11dd890a6446d502bbce084a1b7cd716a"
+          pipx install "opentimestamps-client==0.7.2"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure deterministic first-run policy
+        run: |
+          git config user.name "ASTON OpenTimestamps Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config ots.sourceRef HEAD
+          git config ots.everyCommit true
+          git config ots.initialHistory latest
+          git config ots.fetchBeforeRun false
+          git config ots.proofCommit true
+          git config ots.squashUpgradeCommits false
+
+      - name: Inspect and submit the staging tip
+        shell: bash
+        run: |
+          git ots --version
+          ots --version
+          git ots status
+          git ots run
+
+      - name: Validate proof and publish without rewriting history
+        shell: bash
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          git ots validate
+          test -d .opentimestamps
+          find .opentimestamps -type f -name '*.ots' -print -quit | grep -q .
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"

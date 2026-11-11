@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "source_commit": "b77ee5ad19697146e292321b534bf00a706e5e7b",
+  "git_object_format": "sha1",
+  "payload_format": "git-commit-id-v1",
+  "submitted_at": "2026-11-10T04:06:07Z",
+  "proof": "b77ee5ad19697146e292321b534bf00a706e5e7b.ots",
+  "source_ref": "refs/heads/feat/audit-staging-harness-21x",
+  "triggers": [
+    "every_commit"
+  ]
+}
