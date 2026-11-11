@@ -35,6 +35,7 @@ test("OTS verifier exposes POST /verify and labels its response simulated", asyn
 
 test("staging audit returns HTTP 403 and never invokes chat for PROMPT_INJ_01", async () => {
   let chatCalls = 0;
+  let aiCalls = 0;
   const safetyStub = {
     async fetch(url: string, init?: RequestInit) {
       if (url.endsWith("/audit/claim")) return Response.json({ status: "claimed" });
@@ -48,7 +49,7 @@ test("staging audit returns HTTP 403 and never invokes chat for PROMPT_INJ_01", 
   };
   const env: any = {
     AUDIT_ENABLED: "true", DEPLOY_PROFILE: "staging", AUDIT_SECRET: "a".repeat(40),
-    AI: { run: async () => { throw new Error("AI_MUST_NOT_RUN"); } },
+    AI: { run: async () => { aiCalls++; throw new Error("AI_MUST_NOT_RUN"); } },
     SAFETY: { idFromName: () => "audit", get: () => safetyStub }
   };
   const req = new Request("https://staging.invalid/v1/audit-target", {
@@ -59,4 +60,5 @@ test("staging audit returns HTTP 403 and never invokes chat for PROMPT_INJ_01", 
   const response = await handleStagingAudit(req, env, async () => { chatCalls++; return Response.json({ ok: true }); });
   assert.equal(response?.status, 403);
   assert.equal(chatCalls, 0);
+  assert.equal(aiCalls, 0);
 });
