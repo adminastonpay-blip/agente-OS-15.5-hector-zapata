@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ASTON VBC-2030 · Independent Verification</title>
+<style>
+:root{color-scheme:dark;--bg:#10100f;--panel:#191815;--gold:#c4a36a;--text:#eee9df;--muted:#aaa397;--line:#3c352a}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% 0,#292319 0,#10100f 52%);color:var(--text);font:15px/1.55 Inter,system-ui,sans-serif}
+main{max-width:850px;margin:7vh auto;padding:24px}.eyebrow{color:var(--gold);font-size:11px;letter-spacing:.22em}h1{font:400 clamp(32px,6vw,54px)/1.05 Georgia,serif;margin:14px 0}p{color:var(--muted)}.panel{background:var(--panel);border:1px solid var(--line);padding:24px;margin-top:24px}.field{display:grid;gap:8px;margin:18px 0}label{font-size:11px;letter-spacing:.12em;color:var(--gold)}input{width:100%;padding:12px;background:#0e0e0d;color:var(--text);border:1px solid #514633;border-radius:2px}button{background:var(--gold);border:1px solid var(--gold);padding:13px 18px;color:#171512;font-weight:700;letter-spacing:.08em;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.hash{overflow-wrap:anywhere;font:12px ui-monospace,monospace;background:#0e0e0d;padding:12px;border:1px solid var(--line)}.result{padding:14px;border-left:2px solid var(--gold);background:#211f1a;margin-top:18px;white-space:pre-wrap}.small{font-size:11px}.status{font-size:11px;letter-spacing:.12em;color:var(--gold)}a{color:var(--gold)}
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">ASTON TRUST INFRASTRUCTURE / VBC-2030</div>
+  <h1>Independent<br>Certificate Verification</h1>
+  <p>Verificación de integridad del PDF y comprobación externa del recibo OpenTimestamps. Esta página no declara validez hasta recibir una confirmación criptográfica del verificador independiente.</p>
+  <section class="panel">
+    <div class="status" id="status">READY · NO FILES CHECKED</div>
+    <div class="field"><label for="pdf">CERTIFICATE PDF</label><input id="pdf" type="file" accept="application/pdf"></div>
+    <div class="field"><label for="ots">OPENTIMESTAMPS RECEIPT (.OTS)</label><input id="ots" type="file" accept=".ots,application/octet-stream"></div>
+    <div class="field"><label for="endpoint">VERIFIER API ENDPOINT</label><input id="endpoint" type="url" value="/v1/certificate/verify" autocomplete="url"></div>
+    <button id="verify" type="button">VERIFY CERTIFICATE</button>
+    <div class="field"><label>LOCAL PDF SHA-256</label><div class="hash" id="hash">Not calculated</div></div>
+    <div class="result" id="result" role="status" aria-live="polite">Seleccioná el PDF y el recibo .ots para comenzar.</div>
+  </section>
+  <p class="small">La huella SHA-256 se calcula localmente en el navegador. La huella por sí sola no demuestra una firma digital ni una confirmación Bitcoin. La validación del recibo requiere un verificador OpenTimestamps que compruebe la prueba contra Bitcoin; si el endpoint no está disponible, el resultado será NO VERIFICADO.</p>
+</main>
+<script>
+(() => {
+  const pdfInput=document.getElementById('pdf');
+  const otsInput=document.getElementById('ots');
+  const endpointInput=document.getElementById('endpoint');
+  const button=document.getElementById('verify');
+  const hashNode=document.getElementById('hash');
+  const resultNode=document.getElementById('result');
+  const statusNode=document.getElementById('status');
+  const hex=bytes=>Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');
+  const toBase64=buffer=>{
+    const bytes=new Uint8Array(buffer);let binary='';
+    for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
+    return btoa(binary);
+  };
+  button.addEventListener('click',async()=>{
+    const pdf=pdfInput.files[0],ots=otsInput.files[0];
+    if(!pdf||!ots){resultNode.textContent='Faltan archivos: seleccioná el PDF y el recibo .ots.';return;}
+    if(pdf.type!=='application/pdf'&&!pdf.name.toLowerCase().endsWith('.pdf')){resultNode.textContent='El archivo seleccionado no parece ser un PDF.';return;}
+    if(ots.size>2*1024*1024||pdf.size>25*1024*1024){resultNode.textContent='Límite excedido: PDF máximo 25 MB; recibo OTS máximo 2 MB.';return;}
+    button.disabled=true;statusNode.textContent='VERIFYING · HASH + OTS';
+    resultNode.textContent='Calculando SHA-256 localmente…';
+    try{
+      const [pdfBytes,otsBytes]=await Promise.all([pdf.arrayBuffer(),ots.arrayBuffer()]);
+      const digest=hex(await crypto.subtle.digest('SHA-256',pdfBytes));
+      hashNode.textContent=digest;
+      const endpoint=endpointInput.value.trim();
+      if(!endpoint)throw new Error('Falta configurar el endpoint del verificador.');
+      const response=await fetch(endpoint,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Accept':'application/json'},
+        body:JSON.stringify({schema:'aston.vbc.verify.request.v1',pdf_sha256:digest,proof_base64:toBase64(otsBytes),pdf_name:pdf.name})
+      });
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok||data.ok!==true||data.integrity!==true||data.ots_confirmed!==true){
+        statusNode.textContent='NOT VERIFIED';
+        resultNode.textContent='NO VERIFICADO. El endpoint no confirmó todas las pruebas.\n' + (data.error||data.reason||('HTTP '+response.status));
+        return;
+      }
+      statusNode.textContent='CRYPTOGRAPHICALLY VERIFIED';
+      resultNode.textContent=[
+        'CERTIFICATE VERIFIED',
+        'PDF SHA-256: '+digest,
+        'Bitcoin block: '+(data.bitcoin_block_height||'not supplied'),
+        'Bitcoin timestamp: '+(data.bitcoin_timestamp||'not supplied'),
+        'Issuer signature: '+(data.signature_valid===true?'VALID':'NOT ASSERTED')
+      ].join('\n');
+    }catch(error){
+      statusNode.textContent='NOT VERIFIED';
+      resultNode.textContent='NO VERIFICADO. '+(error.message||'Error de verificación.');
+    }finally{button.disabled=false;}
+  });
+})();
+</script>
+</body>
+</html>
