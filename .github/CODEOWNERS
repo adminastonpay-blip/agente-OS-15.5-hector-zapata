@@ -1,0 +1,8 @@
+# Route security-sensitive changes to the repository owner for review.
+/.github/ @adminastonpay-blip
+/wrangler.toml @adminastonpay-blip
+/wrangler.*.toml @adminastonpay-blip
+/src/audit/ @adminastonpay-blip
+/src/safety/ @adminastonpay-blip
+/src/do/ @adminastonpay-blip
+/schema.sql @adminastonpay-blip

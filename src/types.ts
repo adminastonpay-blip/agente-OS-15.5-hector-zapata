@@ -16,6 +16,10 @@ export interface Env {
   DB?: D1Database;
   VECTORIZE?: VectorizeIndex;
   JOURNAL?: R2Bucket;
+  /** Dedicated Object-Locked R2 bucket for external audit checkpoints and OTS receipts. */
+  AUDIT_ARCHIVE?: R2Bucket;
+  /** Dedicated service binding that validates OpenTimestamps proofs against Bitcoin headers. */
+  OTS_VERIFIER?: Fetcher;
   ETL_QUEUE?: Queue;
   MISSIONS?: Queue;
   HYPERDRIVE?: Hyperdrive;
@@ -25,6 +29,10 @@ export interface Env {
   CHAT_MODEL?: string;
   EMBED_MODEL?: string;
   DEPLOY_PROFILE?: string;
+  AUDIT_ENABLED?: string;
+  AUDIT_ANCHOR_REQUIRED?: string;
+  CHAT_SAFETY_ENFORCED?: string;
+  AUDIT_SECRET?: string;
   API_KEY?: string;
   PII_HMAC_SECRET?: string;
   ACCESS_TEAM_DOMAIN?: string;
@@ -39,6 +47,8 @@ export interface Identity {
   tenant: string;
   roles: string[];
   clearance: "public" | "internal" | "confidential" | "secret";
+  /** Optional plan asserted by a verified identity provider, never by a request header. */
+  plan?: "free" | "pro" | "sovereign" | "gov";
 }
 
 export interface Mission {

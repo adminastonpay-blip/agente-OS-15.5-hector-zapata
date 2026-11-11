@@ -1,0 +1,38 @@
+# Isolated ASTON OS audit staging Worker.
+# Configure the AUDIT_SECRET secret (minimum 32 characters) in Cloudflare before testing the audit endpoint.
+# Separate from wrangler.toml; no production D1 or Queue IDs.
+name = "aston-os-21x-audit-staging"
+main = "src/index.ts"
+compatibility_date = "2026-11-03"
+compatibility_flags = ["nodejs_compat"]
+upload_source_maps = true
+workers_dev = true # isolated workers.dev endpoint; staging route guard limits exposed paths
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
+
+# Dedicated staging-only evidence bucket. Production config remains unchanged.
+[[r2_buckets]]
+binding = "AUDIT_ARCHIVE"
+bucket_name = "aston-audit-archive"
+
+# The new Worker name gives this staging deployment isolated DO namespaces.
+
+[exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
+
+[vars]
+CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+EMBED_MODEL = "@cf/baai/bge-m3"
+DEPLOY_PROFILE = "21.6.3-audit-staging"
+AUDIT_ENABLED = "true"
+CHAT_SAFETY_ENFORCED = "true"
+
+[observability]
+enabled = true
+head_sampling_rate = 1.0
