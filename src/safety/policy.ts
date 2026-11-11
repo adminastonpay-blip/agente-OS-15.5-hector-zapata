@@ -58,12 +58,12 @@ const CLEARANCE_RANK: Record<string, number> = {
 
 /** Deterministic prompt-injection detector. This is a finite pattern set, not a semantic guarantee. */
 const PROMPT_INJECTION_PATTERNS: Array<[string, RegExp]> = [
-  ["instruction_override", /\\b(ignore|disregard|forget|override)\\b.{0,80}\\b(previous|prior|above|all)\\b.{0,40}\\b(instructions?|rules?|prompts?)\\b/i],
-  ["system_prompt_extraction", /\\b(reveal|show|print| disclose|repeat|output|extract)\\b.{0,80}\\b(system|developer)\\s+(prompt|message|instructions?)\\b/i],
-  ["system_prompt_reference", /\\b(system|developer)\\s+prompt\\b/i],
-  ["role_override", /\\b(you are now|act as|pretend to be)\\b.{0,80}\\b(system|developer|admin|unrestricted|jailbreak)\\b/i],
-  ["safety_bypass", /\\b(bypass|disable|remove|ignore)\\b.{0,60}\\b(safety|guardrails?|content policy|restrictions?)\\b/i],
-  ["prompt_injection_marker", /\\b(prompt injection|jailbreak)\\b/i],
+  ["instruction_override", /\b(ignore|disregard|forget|override)\b.{0,80}\b(previous|prior|above|all)\b.{0,40}\b(instructions?|rules?|prompts?)\b/i],
+  ["system_prompt_extraction", /\b(reveal|show|print| disclose|repeat|output|extract)\b.{0,80}\b(system|developer)\s+(prompt|message|instructions?)\b/i],
+  ["system_prompt_reference", /\b(system|developer)\s+prompt\b/i],
+  ["role_override", /\b(you are now|act as|pretend to be)\b.{0,80}\b(system|developer|admin|unrestricted|jailbreak)\b/i],
+  ["safety_bypass", /\b(bypass|disable|remove|ignore)\b.{0,60}\b(safety|guardrails?|content policy|restrictions?)\b/i],
+  ["prompt_injection_marker", /\b(prompt injection|jailbreak)\b/i],
 ];
 
 export function detectPromptInjection(content: unknown): { detected: boolean; rule?: string } {
@@ -108,6 +108,11 @@ function riskFromScore(score: number): RiskLevel {
 }
 
 export function evaluatePolicy(action: ProposedAction, identity: Identity): PolicyResult {
+  const injection = detectPromptInjection(action.args?.message_content);
+  if (injection.detected) {
+    return { decision: "deny", risk: "critical", score: 100,
+      reasons: ["PROMPT_INJ_01: deterministic prompt-injection pattern detected"] };
+  }
   const score = scoreRisk(action, identity);
   const risk = riskFromScore(score);
   const reasons: string[] = [];
