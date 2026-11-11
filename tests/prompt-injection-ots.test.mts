@@ -41,7 +41,7 @@ test("staging audit returns HTTP 403 and never invokes chat for PROMPT_INJ_01", 
       if (url.endsWith("/evaluate")) {
         const request = JSON.parse(String(init?.body || "{}"));
         const policy = evaluatePolicy(request.action, request.identity);
-        return Response.json({ status: policy.decision === "deny" ? "denied" : "allowed", policy });
+        return Response.json({ status: policy.decision === "deny" ? "denied" : "allowed", policy }, { status: policy.decision === "deny" ? 403 : 200 });
       }
       return Response.json({ error: "not_found" }, { status: 404 });
     }
