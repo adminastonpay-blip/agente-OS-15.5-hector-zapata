@@ -146,7 +146,7 @@ export async function handleStagingAudit(
     body: JSON.stringify({
       action: {
         tool: "audit_chat_observation",
-        args: { message_length: body.payload.message.length },
+        args: { message_content: body.payload.message.slice(0, 4000) },
         context: { objective: "non-destructive staging audit" },
       },
       identity: auditIdentity,
@@ -234,7 +234,7 @@ export async function handleStagingAudit(
       safety_interlock_preflight: "executed_separately",
       existing_public_chat_uses_safety_interlock: env.CHAT_SAFETY_ENFORCED === "true",
       chat_policy_gate: "enforced_in_handleChat_for_staging_only",
-      input_guard_on_existing_chat_path: "policy_gate_not_semantic_input_classifier",
+      input_guard_on_existing_chat_path: "deterministic_prompt_injection_patterns",
       output_guard_on_existing_chat_path: "credential_pattern_guard_in_handleChat_for_staging_only",
       streaming_chat: "disabled_while_staging_guard_is_enabled",
       tool_execution: "not_invoked",
