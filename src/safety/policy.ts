@@ -25,35 +25,80 @@ export interface PolicyResult {
 }
 
 const HIGH_RISK_TOOLS = new Set([
-  "create_object",
-  "create_link",
-  "write",
-  "apply_simulation_delta",
-  "commit_simulation",
-  "disable_pool",
-  "failover",
-  "isolate",
-  "delete_object",
-  "run_code",
-  "exec",
-  "defense_mitigate",
-  "code_certify",
+  "create_object", "create_link", "write", "apply_simulation_delta",
+  "commit_simulation", "disable_pool", "failover", "isolate",
+  "delete_object", "run_code", "exec", "defense_mitigate", "code_certify",
 ]);
 
 const CRITICAL_TOOLS = new Set([
-  "disable_pool",
-  "failover",
-  "isolate",
-  "commit_simulation",
-  "delete_object",
+  "disable_pool", "failover", "isolate", "commit_simulation", "delete_object",
 ]);
 
 const CLEARANCE_RANK: Record<string, number> = {
-  public: 0,
-  internal: 1,
-  confidential: 2,
-  secret: 3,
+  public: 0, internal: 1, confidential: 2, secret: 3,
 };
+
+/**
+ * Deterministic, fail-closed prompt-injection pattern screening.
+ * This is a rule-based detector, not an ML semantic classifier. It deliberately
+ * avoids model calls so a detected attack can be denied before inference.
+ */
+const PROMPT_INJECTION_PATTERNS: Array<{ id: string; pattern: RegExp }> = [
+  {
+    id: "override_previous_instructions",
+    pattern: /\bignora(?:r|ndo)?\s+(?:todas?\s+)?(?:las?\s+)?instrucciones\s+(?:anteriores|previas)\b/,
+  },
+  {
+    id: "ignore_system_rules",
+    pattern: /\bignora\s+(?:todo|las?\s+reglas?|el sistema|las? instrucciones)\b/,
+  },
+  {
+    id: "ignore_prior_instructions_en",
+    pattern: /\bignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b/,
+  },
+  {
+    id: "disregard_prior_instructions_en",
+    pattern: /\bdisregard\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b/,
+  },
+  {
+    id: "request_internal_secrets",
+    pattern: /\b(revela|muestra|imprime|expone|filtra|reveal|show|print|expose|leak)\b.{0,100}\b(secretos?|credenciales|tokens?|claves?|instrucciones internas|prompt del sistema|system prompt|credentials|secrets?)\b/,
+  },
+  {
+    id: "privilege_impersonation",
+    pattern: /\b(actua como|pretend to be)\s+(?:un\s+)?(?:sistema|desarrollador|administrador|admin|system|developer)\b/,
+  },
+  {
+    id: "jailbreak_or_unrestricted_mode",
+    pattern: /\b(jailbreak|developer mode|modo sin restricciones|modo desarrollador)\b/,
+  },
+  {
+    id: "disable_safety_instructions",
+    pattern: /\b(no sigas|desobedece|desactiva)\s+(?:las?\s+)?(?:reglas|instrucciones|politicas|medidas de seguridad)\b/,
+  },
+];
+
+function normalizeForInjectionScan(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function detectPromptInjection(message: string): {
+  detected: boolean;
+  indicators: string[];
+} {
+  const normalized = normalizeForInjectionScan(message);
+  const indicators = PROMPT_INJECTION_PATTERNS
+    .filter(({ pattern }) => pattern.test(normalized))
+    .map(({ id }) => id);
+  return { detected: indicators.length > 0, indicators };
+}
 
 export function scoreRisk(action: ProposedAction, identity: Identity): number {
   let score = 10;
@@ -62,12 +107,9 @@ export function scoreRisk(action: ProposedAction, identity: Identity): number {
   else score += 5;
 
   const argsStr = JSON.stringify(action.args ?? {}).toLowerCase();
-  if (argsStr.includes("delete") || argsStr.includes("drop") || argsStr.includes("destroy"))
-    score += 20;
-  if (argsStr.includes("production") || argsStr.includes("prod") || argsStr.includes("live"))
-    score += 15;
-  if (argsStr.includes("secret") || argsStr.includes("credential") || argsStr.includes("token"))
-    score += 15;
+  if (argsStr.includes("delete") || argsStr.includes("drop") || argsStr.includes("destroy")) score += 20;
+  if (argsStr.includes("production") || argsStr.includes("prod") || argsStr.includes("live")) score += 15;
+  if (argsStr.includes("secret") || argsStr.includes("credential") || argsStr.includes("token")) score += 15;
   if (argsStr.includes("block_ip") || argsStr.includes("block_pattern")) score += 25;
 
   if (action.context?.mission_id) score += 10;
@@ -88,11 +130,26 @@ function riskFromScore(score: number): RiskLevel {
 }
 
 export function evaluatePolicy(action: ProposedAction, identity: Identity): PolicyResult {
+  const messageContent = action.args?.message_content;
+  if (
+    (action.tool === "audit_chat_observation" || action.tool === "chat_completion") &&
+    typeof messageContent === "string"
+  ) {
+    const injection = detectPromptInjection(messageContent);
+    if (injection.detected) {
+      return {
+        decision: "deny",
+        risk: "critical",
+        score: 100,
+        reasons: injection.indicators.map((id) => `prompt_injection_detected:${id}`),
+      };
+    }
+  }
+
   const score = scoreRisk(action, identity);
   const risk = riskFromScore(score);
   const reasons: string[] = [];
 
-  // Soft tools from defense observe/rate_limit
   if (action.tool === "defense_mitigate") {
     const mode = String(action.args?.mode || "");
     if (mode === "observe" || mode === "rate_limit") {
@@ -102,24 +159,15 @@ export function evaluatePolicy(action: ProposedAction, identity: Identity): Poli
     if (mode === "block_ip" || mode === "block_pattern") {
       reasons.push("High-impact edge block requires human approval");
       return {
-        decision: "require_approval",
-        risk: "high",
-        score: Math.max(score, 70),
-        reasons,
-        expires_in_ms: 4 * 60 * 60 * 1000,
+        decision: "require_approval", risk: "high", score: Math.max(score, 70),
+        reasons, expires_in_ms: 4 * 60 * 60 * 1000,
       };
     }
   }
 
   if (CRITICAL_TOOLS.has(action.tool) && identity.clearance !== "secret") {
     reasons.push(`Tool "${action.tool}" requiere clearance secret`);
-    return {
-      decision: "deny",
-      risk,
-      score,
-      reasons,
-      requires_clearance: "secret",
-    };
+    return { decision: "deny", risk, score, reasons, requires_clearance: "secret" };
   }
 
   if (
@@ -134,25 +182,19 @@ export function evaluatePolicy(action: ProposedAction, identity: Identity): Poli
   if (risk === "critical" || score >= 75) {
     reasons.push(`Riesgo ${risk} (score ${score}) — requiere aprobación humana`);
     return {
-      decision: "require_approval",
-      risk,
-      score,
-      reasons,
+      decision: "require_approval", risk, score, reasons,
       expires_in_ms: 24 * 60 * 60 * 1000,
     };
   }
 
   if (risk === "high" || score >= 50) {
     if (identity.clearance === "secret" || identity.roles.includes("admin")) {
-      reasons.push(`Riesgo alto pero clearance/roles suficientes — allow`);
+      reasons.push("Riesgo alto pero clearance/roles suficientes — allow");
       return { decision: "allow", risk, score, reasons };
     }
     reasons.push(`Riesgo ${risk} (score ${score}) — requiere aprobación`);
     return {
-      decision: "require_approval",
-      risk,
-      score,
-      reasons,
+      decision: "require_approval", risk, score, reasons,
       expires_in_ms: 4 * 60 * 60 * 1000,
     };
   }

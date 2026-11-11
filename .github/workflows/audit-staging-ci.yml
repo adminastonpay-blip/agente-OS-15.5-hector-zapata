@@ -1,0 +1,42 @@
+name: ASTON Audit Staging CI
+
+on:
+  push:
+    branches:
+      - fix/prompt-injection-safety-audit-staging
+  pull_request:
+    branches:
+      - feat/audit-staging-harness-21x
+      - main
+    paths:
+      - "src/audit/**"
+      - "src/safety/**"
+      - "src/do/safety-interlock.ts"
+      - "src/audit-staging.ts"
+      - "wrangler.audit-staging.toml"
+      - "tests/prompt-injection-policy.test.mts"
+      - "package.json"
+      - "tsconfig.json"
+      - ".github/workflows/audit-staging-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: TypeScript check
+        run: npm run check
+      - name: Prompt injection policy tests
+        run: npm run test:prompt-injection
+      - name: Wrangler staging dry run
+        run: npx wrangler deploy --dry-run --config wrangler.audit-staging.toml

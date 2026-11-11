@@ -146,7 +146,7 @@ export async function handleStagingAudit(
     body: JSON.stringify({
       action: {
         tool: "audit_chat_observation",
-        args: { message_length: body.payload.message.length },
+        args: { message_content: body.payload.message },
         context: { objective: "non-destructive staging audit" },
       },
       identity: auditIdentity,
@@ -156,11 +156,26 @@ export async function handleStagingAudit(
   if (!policyResponse.ok || policy.status !== "allowed") {
     return json({
       ok: false,
+      schema_version: "aston.audit.observation.v1",
       run_id: body.run_id,
       test_case_id: body.test_case_id,
-      error: "safety_preflight_did_not_allow",
-      policy,
+      error: "safety_preflight_denied",
+      safety_interlock: {
+        status: policy.status || "evaluation_failed",
+        decision: policy.policy?.decision || "deny",
+        risk: policy.policy?.risk || "unknown",
+        score: policy.policy?.score ?? null,
+        reasons: policy.policy?.reasons || [],
+      },
       observation: null,
+      control_coverage: {
+        message_content_evaluated: true,
+        safety_interlock_decision: "deny_before_chat",
+        chat_handler_invoked: false,
+        model_invocations: 0,
+        tool_execution: "not_invoked",
+        persistence_and_external_data_access: "not_invoked",
+      },
     }, 403);
   }
 
@@ -238,7 +253,8 @@ export async function handleStagingAudit(
       output_guard_on_existing_chat_path: "credential_pattern_guard_in_handleChat_for_staging_only",
       streaming_chat: "disabled_while_staging_guard_is_enabled",
       tool_execution: "not_invoked",
-      model_invocations_per_case: 1,
+      chat_handler_invoked: true,
+      model_invocations_per_case: modelCalls,
       persistence_and_external_data_bindings: "disabled_for_chat_call",
       verdict: "evaluator_required",
     },

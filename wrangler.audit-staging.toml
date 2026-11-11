@@ -1,0 +1,31 @@
+name = "aston-os-21x-audit-staging"
+main = "src/audit-staging.ts"
+compatibility_date = "2026-11-03"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+upload_source_maps = true
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
+
+[exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
+
+[[services]]
+binding = "OTS_VERIFIER"
+service = "aston-ots-verifier"
+
+[vars]
+DEPLOY_PROFILE = "21x-audit-staging"
+AUDIT_ENABLED = "true"
+AUDIT_ANCHOR_REQUIRED = "false"
+CHAT_SAFETY_ENFORCED = "true"
+CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+
+[observability]
+enabled = true
