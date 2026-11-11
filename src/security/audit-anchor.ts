@@ -93,9 +93,9 @@ export async function verifyExternalOtsAnchor(
   });
   if (!response.ok) return { ok: false, confirmed: false, reason: "ots_verifier_unavailable" };
   const result = await response.json<{
-    ok: boolean; confirmed: boolean; root_hash: string; block_height?: number; timestamp?: number;
+    ok: boolean; confirmed: boolean; root_hash: string; block_height?: number; timestamp?: number; verification_mode?: string;
   }>().catch(() => null);
-  if (!result || !result.ok || !result.confirmed || result.root_hash !== expectedRootHash ||
+  if (!result || result.verification_mode === "simulated" || !result.ok || !result.confirmed || result.root_hash !== expectedRootHash ||
       !Number.isSafeInteger(result.block_height) || (result.block_height ?? 0) < 1) {
     return { ok: false, confirmed: false, reason: "ots_proof_not_confirmed_or_invalid" };
   }
