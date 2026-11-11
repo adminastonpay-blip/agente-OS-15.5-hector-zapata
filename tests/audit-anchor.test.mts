@@ -97,7 +97,7 @@ test("rejects a verifier response for a different root", async () => {
 test("rejects simulated verifier output as non-cryptographic", async () => {
   const bucket = fakeBucket();
   const { key } = await writeImmutableCheckpoint(bucket, checkpoint);
-  const proofKey = key.replace("evidence/anchors/v1/", "evidence/ots/v1/").replace(/\\.json$/, ".ots");
+  const proofKey = key.replace("evidence/anchors/v1/", "evidence/ots/v1/").replace(/\.json$/, ".ots");
   bucket.objects.set(proofKey, { body: "proof-fixture", customMetadata: {} });
   const verifier = {
     fetch: async () => new Response(JSON.stringify({ ok: true, confirmed: true, root_hash: checkpoint.root_hash, block_height: 850000, verification_mode: "simulated" })),
