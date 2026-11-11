@@ -51,9 +51,10 @@ JSON SOLO:
     const secret = this.env.PII_HMAC_SECRET || "aston-edge-default-pii";
     const { masked, vault } = await maskForAgent(prompt, "internal", secret);
     let res: any;
-    if (this.env.AI) {
+    const ai = this.env.AI;
+    if (ai) {
       try {
-        res = await this.env.AI.run(this.env.CHAT_MODEL as any, {
+        res = await ai.run(this.env.CHAT_MODEL as any, {
           messages: [{ role: "user", content: masked }],
         } as any);
       } catch (e: any) {
