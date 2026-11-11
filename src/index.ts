@@ -150,7 +150,7 @@ async function enforceChatSafety(
       body: JSON.stringify({
         action: {
           tool: "chat_completion",
-          args: { message_length: message.length },
+          args: { message_content: message.slice(0, 4000) },
           context: { objective: "staging chat request" },
         },
         identity,
