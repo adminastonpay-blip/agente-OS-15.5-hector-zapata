@@ -214,13 +214,14 @@ export async function persistIncident(env: Env, incident: Incident): Promise<voi
       console.error("[DEFENSE_D1]", String(e));
     }
   }
-  if (!env.SESSION) {
+  const session = env.SESSION;
+  if (!session) {
     console.error("[DEFENSE_DO] SESSION binding unavailable; incident remains unpersisted outside D1");
     return;
   }
   try {
-    const stub = env.SESSION.get(
-      env.SESSION.idFromName(tenantKey({ tenant: incident.tenant } as Identity, "defense"))
+    const stub = session.get(
+      session.idFromName(tenantKey({ tenant: incident.tenant } as Identity, "defense"))
     );
     await stub.fetch("https://do/append", {
       method: "POST",
@@ -265,10 +266,11 @@ export async function listIncidents(env: Env, identity: Identity): Promise<Incid
       /* fall */
     }
   }
-  if (!env.SESSION) return [];
+  const session = env.SESSION;
+  if (!session) return [];
   try {
-    const stub = env.SESSION.get(
-      env.SESSION.idFromName(tenantKey(identity, "defense"))
+    const stub = session.get(
+      session.idFromName(tenantKey(identity, "defense"))
     );
     const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
     const out: Incident[] = [];
