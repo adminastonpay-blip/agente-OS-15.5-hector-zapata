@@ -7,8 +7,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:audit-staging": "wrangler deploy --config wrangler.audit-staging.toml",
+    "dry-run:audit-staging": "wrangler deploy --dry-run --config wrangler.audit-staging.toml",
     "types": "wrangler types",
     "check": "tsc --noEmit",
+    "test:prompt-injection": "node --experimental-strip-types --test tests/prompt-injection-policy.test.mts",
     "test:safety": "node --experimental-strip-types --test tests/chat-output-guard.test.mts",
     "test:security": "node --experimental-strip-types --test tests/chat-output-guard.test.mts tests/mvsp-security.test.mts tests/request-guard.test.mts tests/auth-tenant.test.mts tests/audit-chain.test.mts tests/audit-anchor.test.mts"
   },
