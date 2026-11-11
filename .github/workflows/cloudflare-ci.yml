@@ -41,3 +41,6 @@ jobs:
 
       - name: Validate isolated staging configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run --config wrangler.staging.toml
+
+      - name: Validate isolated OTS verifier Worker bundle (dry run only)
+        run: npx wrangler deploy --dry-run --config workers/ots-verifier/wrangler.toml
