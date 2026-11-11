@@ -1,0 +1,172 @@
+{% comment %}
+  ASTON VBC-2030 dashboard — isolated Shopify section.
+  The default flow is an explicitly labeled UI simulation. It does not run ARP-100.
+  Certificate issuance must go through a server-side Shopify App Proxy; never expose
+  Worker secrets or signing keys in Liquid/browser JavaScript.
+{% endcomment %}
+<section id="aston-vbc-{{ section.id }}" class="aston-vbc" data-proxy="{{ section.settings.app_proxy_base | escape }}" data-demo="{{ section.settings.demo_mode }}">
+  <div class="aston-vbc__shell">
+    <div class="aston-vbc__eyebrow">ASTON TRUST INFRASTRUCTURE / VBC-2030</div>
+    <div class="aston-vbc__head">
+      <div>
+        <h2>{{ section.settings.heading | escape }}</h2>
+        <p>{{ section.settings.subheading | escape }}</p>
+      </div>
+      <span class="aston-vbc__status" data-status>STAGING · READY</span>
+    </div>
+
+    {% if section.settings.demo_mode %}
+      <p class="aston-vbc__notice" role="note">MODO DEMOSTRACIÓN: el progreso es visual y no representa una ejecución real de ARP-100.</p>
+    {% else %}
+      <p class="aston-vbc__notice" role="note">La ejecución real requiere un Shopify App Proxy conectado a un backend autenticado.</p>
+    {% endif %}
+
+    <div class="aston-vbc__meter" aria-label="Progreso de auditoría">
+      <div class="aston-vbc__meter-label"><span>Audit sequence</span><strong data-percent>0%</strong></div>
+      <div class="aston-vbc__track"><span data-bar></span></div>
+    </div>
+
+    <div class="aston-vbc__meta">
+      <div><small>PROTOCOL</small><strong>ARP-100</strong></div>
+      <div><small>CERTIFICATE</small><strong>VBC-2030</strong></div>
+      <div><small>ENVIRONMENT</small><strong>STAGING ONLY</strong></div>
+    </div>
+
+    <div class="aston-vbc__actions">
+      <button type="button" class="aston-vbc__button" data-start>Iniciar Auditoría ARP-100</button>
+      <button type="button" class="aston-vbc__button aston-vbc__button--secondary" data-download hidden>Descargar Certificado VBC-2030</button>
+    </div>
+    <p class="aston-vbc__message" data-message aria-live="polite">Sistema preparado. No se ha iniciado ninguna prueba.</p>
+    <p class="aston-vbc__fine">La emisión de un certificado válido requiere un run_id aprobado y persistido por el backend. Una simulación de interfaz nunca habilita una certificación real.</p>
+  </div>
+</section>
+
+<style>
+  #aston-vbc-{{ section.id }} { color:#eee9df; background:#10100f; padding:clamp(22px,4vw,48px); border:1px solid #8b7148; border-radius:4px; }
+  #aston-vbc-{{ section.id }} .aston-vbc__shell { max-width:980px; margin:auto; }
+  #aston-vbc-{{ section.id }} .aston-vbc__eyebrow { color:#c4a36a; font-size:10px; letter-spacing:.2em; }
+  #aston-vbc-{{ section.id }} .aston-vbc__head { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; margin:18px 0 24px; }
+  #aston-vbc-{{ section.id }} h2 { color:#f4eee3; font-family:Georgia,serif; font-weight:400; letter-spacing:.02em; margin:0 0 8px; font-size:clamp(26px,4vw,42px); }
+  #aston-vbc-{{ section.id }} p { color:#bdb7ac; margin:0; }
+  #aston-vbc-{{ section.id }} .aston-vbc__status { border:1px solid #8b7148; color:#d8bd8a; padding:7px 10px; font-size:10px; letter-spacing:.12em; white-space:nowrap; }
+  #aston-vbc-{{ section.id }} .aston-vbc__notice { margin:18px 0; padding:12px 14px; border-left:2px solid #c4a36a; background:#1b1a17; font-size:12px; }
+  #aston-vbc-{{ section.id }} .aston-vbc__meter { margin:28px 0; }
+  #aston-vbc-{{ section.id }} .aston-vbc__meter-label { display:flex; justify-content:space-between; color:#c4a36a; font-size:11px; letter-spacing:.12em; margin-bottom:10px; }
+  #aston-vbc-{{ section.id }} .aston-vbc__track { height:7px; background:#34312b; overflow:hidden; }
+  #aston-vbc-{{ section.id }} .aston-vbc__track span { display:block; width:0; height:100%; background:linear-gradient(90deg,#80643c,#e2c58d); transition:width .25s ease; }
+  #aston-vbc-{{ section.id }} .aston-vbc__meta { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; border-top:1px solid #37332b; border-bottom:1px solid #37332b; padding:18px 0; }
+  #aston-vbc-{{ section.id }} .aston-vbc__meta div { display:grid; gap:7px; }
+  #aston-vbc-{{ section.id }} .aston-vbc__meta small { color:#8e887d; font-size:9px; letter-spacing:.16em; }
+  #aston-vbc-{{ section.id }} .aston-vbc__meta strong { color:#eee9df; font-size:12px; letter-spacing:.08em; }
+  #aston-vbc-{{ section.id }} .aston-vbc__actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
+  #aston-vbc-{{ section.id }} .aston-vbc__button { border:1px solid #c4a36a; background:#c4a36a; color:#171512; padding:13px 18px; font-size:11px; letter-spacing:.08em; cursor:pointer; }
+  #aston-vbc-{{ section.id }} .aston-vbc__button--secondary { background:transparent; color:#e7d5b2; }
+  #aston-vbc-{{ section.id }} .aston-vbc__button:disabled { opacity:.5; cursor:wait; }
+  #aston-vbc-{{ section.id }} .aston-vbc__message { margin-top:16px; min-height:20px; font-size:12px; }
+  #aston-vbc-{{ section.id }} .aston-vbc__fine { margin-top:14px; color:#817b71; font-size:10px; line-height:1.6; }
+  @media(max-width:600px) { #aston-vbc-{{ section.id }} .aston-vbc__head { display:block; } #aston-vbc-{{ section.id }} .aston-vbc__status { display:inline-block; margin-top:14px; } #aston-vbc-{{ section.id }} .aston-vbc__meta { grid-template-columns:1fr; } #aston-vbc-{{ section.id }} .aston-vbc__actions { display:grid; } }
+</style>
+
+<script>
+(() => {
+  const root = document.getElementById('aston-vbc-{{ section.id }}');
+  if (!root || root.dataset.initialized === 'true') return;
+  root.dataset.initialized = 'true';
+
+  const start = root.querySelector('[data-start]');
+  const download = root.querySelector('[data-download]');
+  const bar = root.querySelector('[data-bar]');
+  const percent = root.querySelector('[data-percent]');
+  const status = root.querySelector('[data-status]');
+  const message = root.querySelector('[data-message]');
+  const proxyBase = (root.dataset.proxy || '/apps/aston-vbc').replace(/\/$/, '');
+  let runId = null;
+
+  start.addEventListener('click', async () => {
+    if (start.disabled) return;
+    start.disabled = true;
+    download.hidden = true;
+    runId = null;
+    let value = 0;
+    status.textContent = 'DEMO · RUNNING';
+    message.textContent = 'Simulación visual iniciada. No se están ejecutando pruebas sobre infraestructura.';
+    const timer = window.setInterval(() => {
+      value = Math.min(100, value + Math.floor(Math.random() * 13) + 5);
+      bar.style.width = value + '%';
+      percent.textContent = value + '%';
+      if (value >= 100) {
+        window.clearInterval(timer);
+        runId = 'demo-' + (window.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now());
+        status.textContent = 'DEMO · COMPLETE';
+        message.textContent = 'Simulación finalizada. Este identificador DEMO no acredita una auditoría real.';
+        download.hidden = false;
+        start.disabled = false;
+      }
+    }, 280);
+  });
+
+  download.addEventListener('click', async () => {
+    if (!runId || !runId.startsWith('demo-')) {
+      message.textContent = 'No existe un run_id de auditoría aprobado.';
+      return;
+    }
+    message.textContent = 'Solicitando emisión al App Proxy…';
+    download.disabled = true;
+    try {
+      const response = await fetch(proxyBase + '/certificate/issue', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ run_id: runId, certificate_profile: 'VBC-2030-V1' })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.status !== 'issued' || !result.download_url) {
+        throw new Error(result.error || 'certificate_issuance_unavailable');
+      }
+      window.location.assign(result.download_url);
+      message.textContent = 'Certificado emitido y descarga iniciada.';
+    } catch (error) {
+      message.textContent = 'Emisión bloqueada: ' + (error.message || 'backend no disponible') + '. La simulación no puede generar certificados.';
+    } finally {
+      download.disabled = false;
+    }
+  });
+})();
+</script>
+
+{% schema %}
+{
+  "name": "ASTON VBC Dashboard",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Título",
+      "default": "Sovereign Certificate Console"
+    },
+    {
+      "type": "text",
+      "id": "subheading",
+      "label": "Subtítulo",
+      "default": "Audit orchestration and certificate issuance — staging environment"
+    },
+    {
+      "type": "text",
+      "id": "app_proxy_base",
+      "label": "Shopify App Proxy base path",
+      "default": "/apps/aston-vbc"
+    },
+    {
+      "type": "checkbox",
+      "id": "demo_mode",
+      "label": "Mostrar aviso de demostración",
+      "default": true
+    }
+  ],
+  "presets": [
+    {
+      "name": "ASTON VBC Dashboard"
+    }
+  ]
+}
+{% endschema %}
