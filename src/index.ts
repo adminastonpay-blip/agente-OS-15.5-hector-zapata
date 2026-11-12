@@ -26,6 +26,7 @@ import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 
 import { handleStagingAudit } from "./audit/staging-endpoint";
+import { handleVbcRegistry } from "./vbc/evidence-manifest";
 import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
@@ -398,6 +399,8 @@ export default {
     }
     const auditResponse = await handleStagingAudit(req, env, handleChat);
     if (auditResponse) return auditResponse;
+    const vbcResponse = await handleVbcRegistry(req, env);
+    if (vbcResponse) return vbcResponse;
     const identity = await resolveIdentity(req, env);
     const rate = await checkRequestRateLimit(
       env,
