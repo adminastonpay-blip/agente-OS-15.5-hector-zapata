@@ -14,6 +14,8 @@ export interface Env {
 
   // Optional platform resources
   DB?: D1Database;
+  /** Dedicated D1 database for the isolated VBC-2030 staging registry. */
+  VBC_REGISTRY?: D1Database;
   VECTORIZE?: VectorizeIndex;
   JOURNAL?: R2Bucket;
   /** Dedicated Object-Locked R2 bucket for external audit checkpoints and OTS receipts. */
