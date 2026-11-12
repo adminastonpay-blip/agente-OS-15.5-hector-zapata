@@ -100,6 +100,7 @@ export async function buildEvidenceManifest(input: ManifestInput) {
       type: "evidence",
       sha256: test.evidence_sha256,
       media_type: "application/json",
+      details: JSON.parse(test.result_json),
     });
     edges.push(
       { from: `run:${run.run_id}`, to: testNode, relation: "contains_test_result" },
@@ -130,7 +131,8 @@ export async function buildEvidenceManifest(input: ManifestInput) {
     },
     graph: { nodes, edges },
     verification: {
-      manifest_sha256: "computed_over_canonical_manifest_without_this_field",
+      manifest_sha256: null,
+      manifest_sha256_scope: "SHA-256 of the canonical manifest JSON bytes stored in manifest_json",
       pdf_signature: "not_implemented",
       bitcoin_ots: "not_anchored",
       independent_verification: "not_yet_available",
