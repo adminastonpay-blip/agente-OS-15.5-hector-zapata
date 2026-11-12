@@ -114,3 +114,17 @@ Clairic → confidence + p_null → certificado ML-DSA → ontología + R2 + lin
 ---
 
 **Agente OS 15.5** · Hector Zapata · 2026
+
+
+## ASTON VBC-2030 — Sovereign Trust & Verification Infrastructure
+
+VBC-2030 is a staging-only design track for independently verifiable certificates. Its architecture, threat model, proposed API contract, and canonical manifest schema are documented here:
+
+- `docs/VBC-2030-SOVEREIGN-ARCHITECTURE.md`
+- `docs/VBC-2030-THREAT-MODEL.md`
+- `docs/VBC-2030-API-CONTRACT.md`
+- `schemas/aston-vbc-manifest-v1.schema.json`
+- Shopify prototype: `shopify/sections/aston-vbc-dashboard.liquid`
+- Independent verifier prototype: `verification/verify.html`
+
+The runtime issuance and verification endpoints are not implemented. No PAdES signing service, confirmed Bitcoin anchoring, or production deployment is claimed.
