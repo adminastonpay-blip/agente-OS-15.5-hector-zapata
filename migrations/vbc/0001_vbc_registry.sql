@@ -81,3 +81,28 @@ WHEN (SELECT status FROM audit_runs WHERE run_id = NEW.run_id) <> 'running'
 BEGIN
   SELECT RAISE(ABORT, 'audit_run_not_running');
 END;
+
+-- A run's identity and audit target are immutable after creation. A running
+-- record may transition exactly once to succeeded or failed.
+CREATE TRIGGER IF NOT EXISTS audit_runs_transition_guard
+BEFORE UPDATE ON audit_runs
+WHEN OLD.status <> 'running'
+  OR NEW.run_id <> OLD.run_id
+  OR NEW.tenant_id <> OLD.tenant_id
+  OR NEW.suite_name <> OLD.suite_name
+  OR NEW.suite_version <> OLD.suite_version
+  OR NEW.created_at <> OLD.created_at
+  OR NEW.started_at <> OLD.started_at
+  OR NEW.software_hash <> OLD.software_hash
+  OR NEW.target_commit <> OLD.target_commit
+  OR NEW.expected_test_count <> OLD.expected_test_count
+  OR NEW.status NOT IN ('succeeded', 'failed')
+  OR NEW.finished_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'audit_run_is_immutable_or_invalid_transition');
+END;
+
+CREATE TRIGGER IF NOT EXISTS audit_runs_no_delete
+BEFORE DELETE ON audit_runs BEGIN
+  SELECT RAISE(ABORT, 'audit_runs_are_immutable');
+END;
