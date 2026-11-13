@@ -1,6 +1,7 @@
 name: ASTON AI Surface Scanner CI
 
 on:
+  workflow_dispatch:
   push:
     branches: ["feat/ai-surface-scanner"]
   pull_request:
