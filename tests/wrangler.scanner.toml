@@ -1,0 +1,5 @@
+name = "aston-scanner-miniflare"
+main = "tests/fixtures/scanner-worker.ts"
+compatibility_date = "2026-11-03"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
