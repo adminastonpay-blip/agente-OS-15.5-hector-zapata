@@ -35,13 +35,14 @@ jobs:
         run: npm run test:security
       - name: Start local Miniflare via Wrangler
         run: |
-          npx wrangler dev --config tests/wrangler.scanner.toml --local --ip 127.0.0.1 --port 8787 > /tmp/aston-scanner-miniflare.log 2>&1 &
+          timeout 90s npx wrangler dev --config tests/wrangler.scanner.toml --local --ip 127.0.0.1 --port 8787 > /tmp/aston-scanner-miniflare.log 2>&1 &
           echo $! > /tmp/aston-scanner-miniflare.pid
           for i in $(seq 1 30); do
-            if curl -sS -o /dev/null http://127.0.0.1:8787/; then break; fi
+            if curl --connect-timeout 1 --max-time 2 -sS -o /dev/null http://127.0.0.1:8787/; then break; fi
             sleep 1
           done
           cat /tmp/aston-scanner-miniflare.log
+          kill -0 "$(cat /tmp/aston-scanner-miniflare.pid)"
       - name: Miniflare endpoint smoke test (rejects loopback target)
         run: |
           code=$(curl -sS -o /tmp/scan-response.json -w "%{http_code}" -X POST http://127.0.0.1:8787/api/scan -H "Content-Type: application/json" --data '{"url":"http://127.0.0.1"}')
