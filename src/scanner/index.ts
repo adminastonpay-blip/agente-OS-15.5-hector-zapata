@@ -57,14 +57,12 @@ function validateTarget(raw: string): URL | null {
 async function fetchPublicPage(start: URL): Promise<{ response: Response; html: string } | null> {
   let current = start;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort("scan_timeout"), FETCH_TIMEOUT_MS);
     let response: Response;
     try {
       response = await fetch(current.toString(), {
         method: "GET",
         redirect: "manual",
-        signal: controller.signal,
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         headers: {
           "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
           "User-Agent": "ASTON-AI-Surface-Scanner/1.0 (+passive-security-review)",
@@ -72,14 +70,13 @@ async function fetchPublicPage(start: URL): Promise<{ response: Response; html: 
       });
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
     }
 
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("Location");
       if (!location || redirects === MAX_REDIRECTS) return null;
-      const next = validateTarget(new URL(location, current).toString());
+      let next: URL | null = null;
+      try { next = validateTarget(new URL(location, current).toString()); } catch { return null; }
       if (!next) return null;
       current = next;
       continue;
