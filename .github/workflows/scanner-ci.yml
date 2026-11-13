@@ -13,6 +13,8 @@ on:
       - "tests/fixtures/scanner-worker.ts"
       - "tests/wrangler.scanner.toml"
       - "src/index.ts"
+      - "src/security/request-guard.ts"
+      - "src/types.ts"
       - "package.json"
       - ".github/workflows/scanner-ci.yml"
 
