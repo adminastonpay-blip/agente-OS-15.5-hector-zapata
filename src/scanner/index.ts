@@ -56,13 +56,16 @@ function validateTarget(raw: string): URL | null {
 
 async function fetchPublicPage(start: URL): Promise<{ response: Response; html: string } | null> {
   let current = start;
+  const deadline = Date.now() + FETCH_TIMEOUT_MS;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return null;
     let response: Response;
     try {
       response = await fetch(current.toString(), {
         method: "GET",
         redirect: "manual",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(remainingMs),
         headers: {
           "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
           "User-Agent": "ASTON-AI-Surface-Scanner/1.0 (+passive-security-review)",
