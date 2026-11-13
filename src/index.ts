@@ -23,6 +23,7 @@ import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
+import { handleSurfaceScan } from "./scanner/index";
 import { handleGovernedAgents } from "./agents/governed";
 
 import { handleStagingAudit } from "./audit/staging-endpoint";
@@ -422,6 +423,9 @@ export default {
       return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
     }
     req = bounded.request;
+
+    // Public, rate-limited passive scanner endpoint. Keep before authenticated API authorization.
+    if (path === "/api/scan" && req.method === "POST") return handleSurfaceScan(req, env);
 
     const access = authorizeApiRequest(req, path, identity);
     if (!access.allowed) {
