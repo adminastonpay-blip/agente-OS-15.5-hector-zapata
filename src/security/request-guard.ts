@@ -67,6 +67,9 @@ export function rateLimitPolicy(path: string, method: string, identity: Identity
   windowMs: number;
 } {
   const verb = method.toUpperCase();
+  if (path === "/api/scan" && verb === "POST") {
+    return { bucket: "public", limit: 5, windowMs: 60 * 60_000 };
+  }
   if (path === "/chat" || path === "/v1/chat" || path.endsWith("/chat/stream") || path === "/v1/solve") {
     return { bucket: "chat", limit: identity.method === "public" ? 8 : 30, windowMs: 60_000 };
   }
