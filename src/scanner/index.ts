@@ -54,12 +54,78 @@ function validateTarget(raw: string): URL | null {
   }
 }
 
+function isPublicIpv4(ip: string): boolean {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const [a,b] = parts;
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+    (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) ||
+    (a === 192 && b === 0 && parts[2] === 2) ||
+    (a === 203 && b === 0 && parts[2] === 113));
+}
+
+function isPublicIp(ip: string): boolean {
+  if (ip.includes(":")) {
+    const value = ip.toLowerCase();
+    // Only global-unicast 2000::/3 is accepted; mapped, loopback, ULA,
+    // link-local, multicast and documentation ranges are rejected.
+    if (value.startsWith("::ffff:") || !/^[23]/.test(value)) return false;
+    if (value.startsWith("2001:db8:")) return false;
+    return true;
+  }
+  return isPublicIpv4(ip);
+}
+
+async function resolvePublicAddresses(hostname: string, signal: AbortSignal): Promise<string[] | null> {
+  const answers: string[] = [];
+  for (const type of ["A", "AAAA"]) {
+    try {
+      const endpoint = new URL("https://cloudflare-dns.com/dns-query");
+      endpoint.searchParams.set("name", hostname);
+      endpoint.searchParams.set("type", type);
+      const response = await fetch(endpoint, {
+        headers: { "Accept": "application/dns-json" },
+        signal,
+      });
+      if (!response.ok) return null;
+      const data = await response.json() as { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
+      if (data.Status !== 0) {
+        // NOERROR with no answers is valid for one address family.
+        if (data.Status === 3) continue;
+        return null;
+      }
+      for (const answer of data.Answer || []) {
+        if ((type === "A" && answer.type === 1) || (type === "AAAA" && answer.type === 28)) {
+          if (!answer.data || !isPublicIp(answer.data)) return null;
+          answers.push(answer.data.toLowerCase());
+        }
+      }
+    } catch { return null; }
+  }
+  return answers.length ? [...new Set(answers)].sort() : null;
+}
+
+async function assertStablePublicDns(hostname: string, deadline: number): Promise<boolean> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return false;
+  const first = await resolvePublicAddresses(hostname, AbortSignal.timeout(remaining));
+  if (!first) return false;
+  const secondRemaining = deadline - Date.now();
+  if (secondRemaining <= 0) return false;
+  const second = await resolvePublicAddresses(hostname, AbortSignal.timeout(secondRemaining));
+  if (!second) return false;
+  return first.length === second.length && first.every((ip, index) => ip === second[index]);
+}
+
 async function fetchPublicPage(start: URL): Promise<{ response: Response; html: string } | null> {
   let current = start;
   const deadline = Date.now() + FETCH_TIMEOUT_MS;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return null;
+    if (!await assertStablePublicDns(current.hostname, deadline)) return null;
     let response: Response;
     try {
       response = await fetch(current.toString(), {
@@ -212,6 +278,12 @@ export async function handleSurfaceScan(req: Request, env: Env): Promise<Respons
     ai_report,
     recommendation,
     scan: { mode: "passive", fetched_url: target.origin, http_status: fetched.response.status, html_inspected: fetched.html.length > 0, html_limit_bytes: MAX_HTML_BYTES },
-    disclaimer: "Resultado orientativo basado únicamente en una respuesta HTTP pública. No es pentest, auditoría integral ni certificación.",
+    deep_assessment: {
+      available: false,
+      requirement: "La evaluación profunda de 7 días requiere verificar la propiedad del dominio mediante un registro DNS TXT único. La verificación todavía no está habilitada en este endpoint.",
+      suggested_record: "_aston-verify.<dominio> TXT <token-único-entregado-por-ASTON>",
+      status: "ownership_verification_not_implemented",
+    },
+    disclaimer: "Resultado orientativo basado únicamente en una respuesta HTTP pública. No es pentest, auditoría integral ni certificación. La comprobación DNS reduce el riesgo de respuestas privadas, pero Workers fetch no permite fijar la IP validada a la conexión: no elimina por completo la ventana de DNS rebinding."
   });
 }
