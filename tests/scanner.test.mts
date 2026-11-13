@@ -21,10 +21,19 @@ test("rejects malformed payloads", async () => {
 test("returns findings and redacts detected key values", async () => {
   const originalFetch = globalThis.fetch;
   const fakeKey = "sk-proj-" + "A".repeat(32);
-  globalThis.fetch = async () => new Response("<html><script>const key='" + fakeKey + "'</script></html>", {
-    status: 200, headers: { "content-type": "text/html", "Access-Control-Allow-Origin": "*",
-      "Strict-Transport-Security": "max-age=31536000" },
-  });
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const requestUrl = String(input);
+    if (requestUrl.startsWith("https://cloudflare-dns.com/")) {
+      const type = new URL(requestUrl).searchParams.get("type");
+      return Response.json({ Status: 0, Answer: type === "A"
+        ? [{ type: 1, data: "93.184.216.34" }]
+        : [{ type: 28, data: "2606:2800:220:1:248:1893:25c8:1946" }] });
+    }
+    return new Response("<html><script>const key='" + fakeKey + "'</script></html>", {
+      status: 200, headers: { "content-type": "text/html", "Access-Control-Allow-Origin": "*",
+        "Strict-Transport-Security": "max-age=31536000" },
+    });
+  };
   try {
     const response = await handleSurfaceScan(new Request("https://worker.test/api/scan", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://example.com" }),
@@ -39,7 +48,34 @@ test("returns findings and redacts detected key values", async () => {
 
 test("follows no redirect to an internal target", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1/admin" } });
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const requestUrl = String(input);
+    if (requestUrl.startsWith("https://cloudflare-dns.com/")) {
+      const type = new URL(requestUrl).searchParams.get("type");
+      return Response.json({ Status: 0, Answer: type === "A" ? [{ type: 1, data: "93.184.216.34" }] : [] });
+    }
+    return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/admin" } });
+  };
+  try {
+    const response = await handleSurfaceScan(new Request("https://worker.test/api/scan", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://example.com" }),
+    }), {} as any);
+    assert.equal(response.status, 502);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("rejects DNS answers containing private addresses", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const requestUrl = String(input);
+    if (requestUrl.startsWith("https://cloudflare-dns.com/")) {
+      const type = new URL(requestUrl).searchParams.get("type");
+      return Response.json({ Status: 0, Answer: type === "A"
+        ? [{ type: 1, data: "10.0.0.8" }]
+        : [] });
+    }
+    throw new Error("target fetch must not occur");
+  };
   try {
     const response = await handleSurfaceScan(new Request("https://worker.test/api/scan", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://example.com" }),
