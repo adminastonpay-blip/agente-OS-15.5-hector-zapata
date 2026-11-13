@@ -23,11 +23,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Resolve dependencies and create an ephemeral lockfile
-        run: |
-          set -euo pipefail
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: TypeScript validation
         run: npm run check
       - name: Build production bundle without deployment
@@ -48,13 +45,6 @@ jobs:
         with:
           name: aston-os-worker-bundles
           path: dist/
-          if-no-files-found: error
-          retention-days: 30
-      - name: Retain generated dependency lockfile for review
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
-        with:
-          name: generated-npm-lockfile
-          path: package-lock.json
           if-no-files-found: error
           retention-days: 30
 
