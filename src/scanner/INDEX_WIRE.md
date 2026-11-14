@@ -1,28 +1,16 @@
-# Wire `/v1/audit` in `src/index.ts`
+# Wire status
 
-Replace:
+`src/index.ts` re-exports Durable Object classes and defaults to `./worker-app`.
 
-```ts
-import { handleSurfaceScan } from "./scanner/index";
-```
-
-with:
-
-```ts
-import { tryScannerRoutes } from "./scanner/routes";
-```
-
-Replace:
-
-```ts
-if (path === "/api/scan" && req.method === "POST") return handleSurfaceScan(req, env);
-```
-
-with:
+`src/worker-app.ts` calls:
 
 ```ts
 const scanned = await tryScannerRoutes(path, req.method, req, env);
 if (scanned) return scanned;
 ```
 
-Keep this **before** `authorizeApiRequest` so the enterprise demo stays public + rate-limited.
+before `authorizeApiRequest`.
+
+Public routes:
+- `POST /v1/audit` — attestation (no findings in response)
+- `POST /api/scan` — interactive lab scan; with `email` field → attestation path
