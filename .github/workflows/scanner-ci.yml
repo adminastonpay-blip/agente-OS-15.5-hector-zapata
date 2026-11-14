@@ -8,11 +8,13 @@ on:
     branches: ["main"]
     paths:
       - "src/scanner/**"
+      - "src/worker-app.ts"
+      - "src/index.ts"
       - "sections/aston-scanner-dashboard.liquid"
+      - "shopify/sections/aston-scanner-dashboard.liquid"
       - "tests/scanner.test.mts"
       - "tests/fixtures/scanner-worker.ts"
       - "tests/wrangler.scanner.toml"
-      - "src/index.ts"
       - "src/security/request-guard.ts"
       - "src/types.ts"
       - "package.json"
@@ -51,6 +53,11 @@ jobs:
           code=$(curl -sS -o /tmp/scan-response.json -w "%{http_code}" -X POST http://127.0.0.1:8787/api/scan -H "Content-Type: application/json" --data '{"url":"http://127.0.0.1"}')
           test "$code" = "400"
           grep -q "invalid_target" /tmp/scan-response.json
+      - name: Miniflare /v1/audit requires matching email
+        run: |
+          code=$(curl -sS -o /tmp/audit-response.json -w "%{http_code}" -X POST http://127.0.0.1:8787/v1/audit -H "Content-Type: application/json" --data '{"target":"https://example.com","email":"not-matching@other.com"}')
+          test "$code" = "400"
+          grep -q "EMAIL_DOMAIN_MISMATCH\|email_domain" /tmp/audit-response.json
       - name: Stop local Miniflare
         if: always()
         run: |

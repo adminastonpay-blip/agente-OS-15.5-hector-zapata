@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { handleSurfaceScan } from "../src/scanner/index.ts";
+import { handleEnterpriseAudit } from "../src/scanner/enterprise-audit.ts";
 
 test("rejects private, local and non-http targets without fetching", async () => {
   for (const url of ["http://127.0.0.1", "http://localhost", "http://192.168.1.10", "file:///etc/passwd", "https://example.com:8443"]) {
@@ -82,4 +83,62 @@ test("rejects DNS answers containing private addresses", async () => {
     }), {} as any);
     assert.equal(response.status, 502);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("enterprise /v1/audit never returns score or vulnerabilities", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const requestUrl = String(input);
+    if (requestUrl.startsWith("https://cloudflare-dns.com/")) {
+      const type = new URL(requestUrl).searchParams.get("type");
+      return Response.json({
+        Status: 0,
+        Answer: type === "A" ? [{ type: 1, data: "93.184.216.34" }] : [],
+      });
+    }
+    return new Response("<html><body>ok</body></html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
+  };
+  try {
+    const response = await handleEnterpriseAudit(
+      new Request("https://worker.test/v1/audit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target: "https://example.com",
+          email: "security@example.com",
+        }),
+      }),
+      {} as any
+    );
+    const body = await response.json() as any;
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.ok(typeof body.request_id === "string" && body.request_id.startsWith("req_"));
+    assert.equal(body.attestation_status, "unverified");
+    assert.equal(body.score, undefined);
+    assert.equal(body.vulnerabilities, undefined);
+    assert.ok(!JSON.stringify(body).includes("vulnerabilities"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("enterprise /v1/audit rejects email domain mismatch", async () => {
+  const response = await handleEnterpriseAudit(
+    new Request("https://worker.test/v1/audit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        target: "https://example.com",
+        email: "user@other-domain.org",
+      }),
+    }),
+    {} as any
+  );
+  const body = await response.json() as any;
+  assert.equal(response.status, 400);
+  assert.equal(body.code, "EMAIL_DOMAIN_MISMATCH");
 });
