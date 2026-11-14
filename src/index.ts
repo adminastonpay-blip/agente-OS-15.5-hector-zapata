@@ -150,7 +150,7 @@ async function enforceChatSafety(
       body: JSON.stringify({
         action: {
           tool: "chat_completion",
-          args: { message_length: message.length },
+          args: { message_content: message.slice(0, 4000) },
           context: { objective: "staging chat request" },
         },
         identity,
@@ -160,7 +160,7 @@ async function enforceChatSafety(
     if (!response.ok || result.status !== "allowed") {
       return {
         ok: false,
-        status: response.ok ? 403 : 503,
+        status: result.status === "denied" ? 403 : response.ok ? 403 : 503,
         error: result.status === "pending_approval"
           ? "chat_requires_human_approval"
           : result.status === "denied"

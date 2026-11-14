@@ -202,7 +202,8 @@ export class SafetyInterlock {
 
     if (u.pathname === "/evaluate" && req.method === "POST") {
       const body = await req.json<{ action: ProposedAction; identity: Identity }>();
-      return Response.json(await this.evaluateAndGate(body.action, body.identity));
+      const result = await this.evaluateAndGate(body.action, body.identity);
+      return Response.json(result, { status: result.status === "denied" ? 403 : 200 });
     }
 
     if (u.pathname === "/pending" && req.method === "GET") {
