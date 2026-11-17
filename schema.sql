@@ -19,12 +19,12 @@ CREATE TABLE IF NOT EXISTS objects (
 );
 CREATE INDEX IF NOT EXISTS idx_obj_tenant ON objects(tenant, type_id);
 CREATE TABLE IF NOT EXISTS links (
-  id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL,
+  id TEXT PRIMARY KEY, tenant TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL,
   type TEXT NOT NULL, properties TEXT, version INTEGER DEFAULT 1,
   valid_from INTEGER NOT NULL, valid_to INTEGER, created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_link_from ON links(from_id, type);
-CREATE INDEX IF NOT EXISTS idx_link_to ON links(to_id, type);
+CREATE INDEX IF NOT EXISTS idx_link_tenant_from ON links(tenant, from_id, type);
+CREATE INDEX IF NOT EXISTS idx_link_tenant_to ON links(tenant, to_id, type);
 
 -- ===== Pilar: Linaje =====
 CREATE TABLE IF NOT EXISTS lineage_events (
