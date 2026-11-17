@@ -28,7 +28,7 @@ export class AgentNode {
             attempts,
             status: planGate.status,
             policy: planGate.policy,
-          }, planGate.status === "pending_approval" ? 202 : 503);
+          }, { status: planGate.status === "pending_approval" ? 202 : 503 });
         }
         const calls = await this.planTools(role, goal, context, tools);
         const obs: string[] = [];
@@ -70,7 +70,7 @@ export class AgentNode {
             status: synthGate.status,
             policy: synthGate.policy,
             blocked,
-          }, synthGate.status === "pending_approval" ? 202 : 503);
+          }, { status: synthGate.status === "pending_approval" ? 202 : 503 });
         }
         const answer = await this.synthesize(identity, role, goal, context, obs);
         const status = blocked.some((b) => b.status === "pending_approval")
