@@ -12,17 +12,19 @@ const identity = {
 };
 
 function envWith(status: number, payload: unknown, capture?: (body: any) => void) {
+  const stub = {
+    fetch: async (_url: string, init: RequestInit) => {
+      if (capture && typeof init.body === "string") capture(JSON.parse(init.body));
+      return new Response(JSON.stringify(payload), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  };
   return {
     SAFETY: {
-      idFromName: (_name: string) => ({
-        fetch: async (_url: string, init: RequestInit) => {
-          if (capture && typeof init.body === "string") capture(JSON.parse(init.body));
-          return new Response(JSON.stringify(payload), {
-            status,
-            headers: { "content-type": "application/json" },
-          });
-        },
-      }),
+      idFromName: (_name: string) => "test-do-id",
+      get: (_id: string) => stub,
     },
   } as any;
 }
