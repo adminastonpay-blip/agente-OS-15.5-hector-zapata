@@ -139,12 +139,7 @@ async function enforceChatSafety(
   message: string,
   identity: Awaited<ReturnType<typeof resolveIdentity>>
 ): Promise<{ ok: true } | { ok: false; status: number; error: string; policy?: unknown }> {
-  // Enforcement is opt-in and staging-only. Production behavior is unchanged unless
-  // an operator explicitly configures this flag in a staging deployment.
-  if (
-    env.CHAT_SAFETY_ENFORCED !== "true" ||
-    !String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")
-  ) return { ok: true };
+  // SafetyInterlock is mandatory in every deployment. Missing or failing bindings deny the request.
   if (!env.SAFETY) return { ok: false, status: 503, error: "chat_safety_binding_unavailable" };
 
   try {
@@ -209,7 +204,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
     ];
     const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
     const answer = out.response || "";
-    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging") && !isOutputSafeForCredentialLeak(answer)) {
+    if (!isOutputSafeForCredentialLeak(answer)) {
       return json({ ok: false, error: "chat_output_guard_blocked" }, 502);
     }
     await appendHistory(stub, message, answer);
@@ -235,95 +230,12 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
   }
 }
 
-async function handleChatStream(req: Request, env: Env): Promise<Response> {
-  try {
-    if (env.CHAT_SAFETY_ENFORCED === "true" && String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")) {
-      return json({ ok: false, error: "stream_disabled_until_buffered_safety_guard_is_implemented" }, 503);
-    }
-    if (!env.AI) {
-      return json({ ok: false, error: "AI binding not configured" }, 503);
-    }
-    const body = await req.json<any>().catch(() => ({}));
-    const message =
-      typeof body.message === "string"
-        ? body.message.trim()
-        : typeof body.prompt === "string"
-          ? body.prompt.trim()
-          : "";
-    if (!message) return json({ ok: false, error: "message requerido" }, 400);
-    const session_id =
-      typeof body.session_id === "string" && body.session_id
-        ? body.session_id.slice(0, 80)
-        : "default";
-    const useDeep = body.mode === "deep" || body.deep === true;
-    const identity = await resolveIdentity(req, env);
-    const { stub, history } = await loadHistory(env, session_id, body, identity);
-    const messages = [
-      { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
-      ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
-      { role: "user", content: message },
-    ];
-    const { stream, model, mode } = await chatStream(env, messages, {
-      max_tokens: useDeep ? 1024 : 512,
-    });
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    let full = "";
-    const sse = new ReadableStream({
-      async start(controller) {
-        const send = (event: string, data: unknown) => {
-          controller.enqueue(
-            encoder.encode(`event: ${event}
-data: ${JSON.stringify(data)}
-
-`)
-          );
-        };
-        send("meta", { ok: true, model, stream_mode: mode, session_id, version: VERSION });
-        try {
-          const reader = stream.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            let piece = "";
-            if (typeof value === "string") piece = value;
-            else if (value instanceof Uint8Array) piece = decoder.decode(value, { stream: true });
-            else if (value && typeof value === "object") {
-              piece =
-                (value as any).response ||
-                (value as any).text ||
-                (value as any).delta?.content ||
-                "";
-            }
-            if (piece) {
-              full += piece;
-              send("token", { t: piece });
-            }
-          }
-          await appendHistory(stub, message, full);
-          send("done", { ok: true, answer: full, session_id, model, version: VERSION });
-          controller.close();
-        } catch (e: any) {
-          send("error", { error: String(e?.message || e).slice(0, 200) });
-          controller.close();
-        }
-      },
-    });
-    return new Response(sse, {
-      status: 200,
-      headers: {
-        ...CORS,
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
-  } catch (e: any) {
-    return json(
-      { ok: false, error: "stream unavailable", detail: String(e?.message || e).slice(0, 250) },
-      502
-    );
-  }
+async function handleChatStream(_req: Request, _env: Env): Promise<Response> {
+  // Streaming is disabled until the complete response can be checked before any bytes are released.
+  return json({
+    ok: false,
+    error: "chat_stream_disabled_until_buffered_safety_guard_is_implemented",
+  }, 503);
 }
 
 async function handleTts(req: Request, env: Env): Promise<Response> {
