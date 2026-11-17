@@ -70,3 +70,12 @@ test("RecoveryWorkflow requires propagated verified identity before model infere
   assert.match(recovery, /if \(!gate\.ok\) throw new Error/);
   assert.match(recovery, /if \(!this\.env\.AI\) throw new Error/);
 });
+
+test("RAG ingestion and query embeddings require the shared AI preflight", () => {
+  const ingest = v21.slice(v21.indexOf('path === "/v1/rag/ingest"'), v21.indexOf('path === "/v1/rag/query"'));
+  const query = v21.slice(v21.indexOf('path === "/v1/rag/query"'), v21.indexOf('path === "/v1/ontology/types"'));
+  assert.match(ingest, /"rag_ingest_embedding"/);
+  assert.match(ingest, /Preflight every chunk before the first persistence or vector-store write/);
+  assert.match(query, /"rag_query_embedding"/);
+  assert.match(query, /if \(!safety\.ok\)/);
+});
