@@ -10,7 +10,7 @@
     "types": "wrangler types",
     "check": "tsc --noEmit",
     "test:safety": "node --experimental-strip-types --test tests/chat-output-guard.test.mts tests/security-interlock-routing.test.mts tests/mission-brain-safety.test.mts",
-    "test:security": "node --experimental-strip-types --test tests/chat-output-guard.test.mts tests/mvsp-security.test.mts tests/request-guard.test.mts tests/auth-tenant.test.mts tests/audit-chain.test.mts tests/audit-anchor.test.mts tests/session-key.test.mts tests/recovery-guard.test.mts tests/security-interlock-routing.test.mts tests/mission-brain-safety.test.mts tests/runtime-constitution-source.test.mts && node --experimental-loader ./tests/ts-loader.mjs --test tests/constitution-route-advisory.test.mts tests/access-read-approval.test.mts tests/governed-access-fail-closed.test.mts tests/tenant-link-isolation.test.mts tests/adversarial-pass-1.test.mts"
+    "test:security": "node --experimental-strip-types --test tests/chat-output-guard.test.mts tests/mvsp-security.test.mts tests/request-guard.test.mts tests/auth-tenant.test.mts tests/audit-chain.test.mts tests/audit-anchor.test.mts tests/session-key.test.mts tests/recovery-guard.test.mts tests/security-interlock-routing.test.mts tests/mission-brain-safety.test.mts tests/runtime-constitution-source.test.mts && node --experimental-loader ./tests/ts-loader.mjs --test tests/constitution-route-advisory.test.mts tests/access-read-approval.test.mts tests/governed-access-fail-closed.test.mts tests/access-explicit-allow.test.mts tests/tenant-link-isolation.test.mts tests/adversarial-pass-1.test.mts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261106.1",
