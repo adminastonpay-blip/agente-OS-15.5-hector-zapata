@@ -7,6 +7,7 @@ const v21 = await readFile(new URL("../src/routes/v21.ts", import.meta.url), "ut
 const supervisor = await readFile(new URL("../src/do/supervisor.ts", import.meta.url), "utf8");
 const agent = await readFile(new URL("../src/do/agent-node.ts", import.meta.url), "utf8");
 const simulation = await readFile(new URL("../src/do/simulation.ts", import.meta.url), "utf8");
+const recovery = await readFile(new URL("../src/workflows/recovery.ts", import.meta.url), "utf8");
 
 test("chat safety gate cannot be disabled by deployment flags", () => {
   const start = source.indexOf("async function enforceChatSafety(");
@@ -52,4 +53,17 @@ test("SimulationTwin fails closed on missing or failed interlock", () => {
 
 test("chat output credential guard is unconditional", () => {
   assert.match(source, /if \(!isOutputSafeForCredentialLeak\(answer\)\)/);
+});
+
+test("chat, decision, TTS, and voice pass full content through the shared AI preflight", () => {
+  assert.match(source, /evaluateAiSafety\(\s*env,\s*identity,\s*"chat_completion",\s*message/s);
+  assert.match(source, /"tts_synthesis", text/);
+  assert.match(source, /"voice_synthesis", spoken/);
+  assert.match(v21, /"decision_inference",\s*message/s);
+});
+
+test("RecoveryWorkflow requires propagated verified identity before model inference", () => {
+  assert.match(recovery, /evaluateAiSafety\(this\.env, m\.identity, "recovery_hypothesis"/);
+  assert.match(recovery, /if \(!gate\.ok\) throw new Error/);
+  assert.match(recovery, /if \(!this\.env\.AI\) throw new Error/);
 });
