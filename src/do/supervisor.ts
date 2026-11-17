@@ -168,6 +168,9 @@ export class Supervisor {
         method: "POST",
         body: JSON.stringify({ action, identity }),
       });
+      if (!res.ok) {
+        return { status: "denied" as const, policy: { reasons: ["SafetyInterlock request failed — fail-closed"] } };
+      }
       return (await res.json()) as {
         status: "allowed" | "denied" | "pending_approval";
         approval_id?: string;
