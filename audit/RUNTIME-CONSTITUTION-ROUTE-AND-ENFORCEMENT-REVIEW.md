@@ -1,10 +1,10 @@
 # Runtime Constitution Route and Enforcement Review
 
-**Status:** READ-ONLY SECURITY AUDIT  
+**Status:** SECURITY AUDIT — SOURCE REVIEW + TEST UPDATE  
 **Date:** 2026-11-17  
 **Repository:** agente-OS-15.5-hector-zapata  
 **Production execution:** NOT PERFORMED  
-**Cloudflare execution/deployment:** NOT PERFORMED
+**Cloudflare deployment/runtime validation:** NOT PERFORMED
 
 ## Executive finding
 
@@ -47,12 +47,17 @@ Therefore, this endpoint can calculate a verdict for caller-supplied input witho
 
 These controls are separate implementations and must not be assumed to inherit the constitution schema or its limits.
 
-### 4. Test coverage observation
+### 4. Test coverage update
 
-- `tests/security-interlock-routing.test.mts` checks selected SafetyInterlock routing properties using source assertions.
-- `tests/mvsp-security.test.mts` tests public/private API authorization behavior but does not test the semantic trust boundary of the constitution check endpoint.
-- No constitution-specific runtime test file was present in the inspected test tree.
-- The Trust Infrastructure repository separately has tests that duplicate a simplified evaluator rather than importing its real source module; see its constitution audit record.
+The initial audit found no runtime test importing the constitution source module directly. That gap has since been partially addressed:
+
+- PR #27 added `tests/runtime-constitution-source.test.mts`, importing `src/provenance/constitution.ts` directly.
+- It covers profile defaults, allowed tools, denied tools, the explicit `reason` exception, each numeric budget/risk threshold, and exact-limit behavior.
+- PR #27 was merged at commit `607e407ddfe3feb4cab5ad923b124268d945e62b`.
+- GitHub Actions run `44192337492` passed: `test:safety`, `test:security`, TypeScript check, and Wrangler dry-run. This is repository CI evidence, not a live Cloudflare deployment or Durable Object/D1 integration test.
+- The test does **not** yet exercise the route trust boundary: forged constitution input, tenant mismatch, revoked/expired/stale constitution, authenticated identity binding, approval evidence, or SafetyInterlock failure.
+
+Cloudflare Workers Builds checks on the PR also reported preview failures for configured Worker names that do not exist on the account. Those failures are not evidence of a successful deployment; no deployment was performed here.
 
 ## Findings
 
@@ -76,12 +81,12 @@ The runtime contains at least three distinct policy mechanisms: constitution che
 
 ## Required remediation sequence
 
-1. Decide whether `/v1/constitution/check` is intentionally a public calculator or is intended to provide authoritative governance.
-2. If advisory, explicitly label/document its output as non-authoritative and ensure no caller uses it as an execution permit.
-3. If authoritative, require server-side lookup of a tenant-bound, issued, versioned constitution; validate identity, lifecycle/revocation, and integrity; do not accept policy authority from caller-supplied JSON.
-4. Define the authoritative enforcement point and connect it to execution only through a single fail-closed contract.
-5. Add tests importing the real source module and route handler, including forged constitution, cross-tenant, revoked, expired, stale-version, budget boundary, approval, and interlock-failure cases.
-6. Keep implementation changes separate from this audit and validate with simulated tests before any deployment review.
+1. Decide and document that `/v1/constitution/check` is an advisory calculator unless and until a server-authoritative implementation replaces its trust model.
+2. Ensure no caller or execution path treats its caller-supplied `ok` response as an execution permit.
+3. Define a canonical governance decision contract that binds authenticated principal, authoritative tenant lifecycle, agent identity, issued constitution version/integrity, delegation, resource/action, budget, risk, approval evidence, and policy version.
+4. Select one authoritative enforcement point immediately before side effects; it must fail closed on missing, invalid, stale, revoked, cross-tenant, or unverifiable inputs and require an explicit `allowed` decision before execution.
+5. Add route and enforcement tests for forged constitution, cross-tenant access, revoked/expired/stale policy, approval evidence, budget boundaries, and interlock failure. The source-module unit-test gap is now addressed by PR #27; these trust-boundary tests remain open.
+6. Keep implementation changes separate and validate with simulated tests before any deployment review.
 
 ## Disposition
 
@@ -89,6 +94,8 @@ The runtime contains at least three distinct policy mechanisms: constitution che
 - Check endpoint is explicitly allowlisted as public: **CONFIRMED**.
 - Check endpoint loads stored constitution before evaluation: **NOT OBSERVED**.
 - Constitution check is wired into inspected agent execution gates: **NOT OBSERVED**.
+- Direct tests of the real constitution source module: **IMPLEMENTED AND CI-TESTED** (PR #27).
+- Route trust-boundary and real execution integration tests: **NOT IMPLEMENTED**.
 - SafetyInterlock is a separate execution gate in inspected paths: **CONFIRMED**.
 - Production exposure or exploitability: **NOT ESTABLISHED**.
 - Cloudflare/runtime validation: **NOT PERFORMED**.
