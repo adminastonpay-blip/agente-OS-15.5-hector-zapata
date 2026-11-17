@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { chat, chatStream } from "./lib/ai";
+import { chat } from "./lib/ai";
 import { SessionMemory } from "./do/session";
 import { GraphResolver } from "./do/graph-do";
 import { Supervisor } from "./do/supervisor";
