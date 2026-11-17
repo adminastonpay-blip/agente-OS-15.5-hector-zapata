@@ -19,7 +19,7 @@ test("chat safety gate cannot be disabled by deployment flags", () => {
   assert.match(gate, /evaluateAiSafety/);
   assert.match(aiSafety, /if \(!env\.SAFETY\)/);
   assert.match(aiSafety, /ai_safety_unavailable/);
-  assert.match(aiSafety, /message_content: content\.slice/);
+  assert.match(aiSafety, /message_content: content, message_length: content\.length/);
 });
 
 test("streaming remains fail-closed until buffered output inspection exists", () => {
