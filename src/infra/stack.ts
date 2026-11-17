@@ -13,6 +13,7 @@ export type InfraItem = {
 };
 
 export function infraInventory(env: Env): InfraItem[] {
+  const coreDurableObjectsBound = !!(env.SESSION && env.GRAPH && env.SAFETY);
   return [
     {
       id: "workers_ai",
@@ -20,22 +21,23 @@ export function infraInventory(env: Env): InfraItem[] {
       role: "inference",
       bound: !!env.AI,
       aston_route: "/v1/chat",
-      phase: "live",
+      phase: env.AI ? "live" : "planned",
     },
     {
       id: "ai_gateway",
       cloudflare: "AI Gateway",
-      role: "routing / cache / fallback",
+      role: "optional routing / cache / fallback",
       bound: !!env.AI_GATEWAY_ID,
       aston_route: "/v1/ai/routes",
-      phase: env.AI_GATEWAY_ID ? "live" : "planned",
+      // A configured ID is not proof that the remote Gateway exists or is healthy.
+      phase: env.AI_GATEWAY_ID ? "soft" : "planned",
     },
     {
       id: "durable_objects",
       cloudflare: "Durable Objects (+ SQLite)",
       role: "hot state / facets pattern",
-      bound: !!(env.SESSION && env.GRAPH && env.SAFETY),
-      phase: "live",
+      bound: coreDurableObjectsBound,
+      phase: coreDurableObjectsBound ? "live" : "planned",
     },
     {
       id: "d1",
@@ -66,7 +68,7 @@ export function infraInventory(env: Env): InfraItem[] {
       role: "async ETL / recovery",
       bound: !!env.ETL_QUEUE,
       aston_route: "/v1/etl/enqueue",
-      phase: env.ETL_QUEUE ? "live" : "planned",
+      phase: env.ETL_QUEUE ? "soft" : "planned",
     },
     {
       id: "hyperdrive",
