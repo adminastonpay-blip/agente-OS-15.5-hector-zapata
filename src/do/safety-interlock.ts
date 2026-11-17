@@ -364,7 +364,7 @@ export class SafetyInterlock {
        (id, action_json, identity_json, policy_json, created_at, expires_at, status)
        VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
       id,
-      JSON.stringify(action),
+      JSON.stringify(redactActionForPersistence(action)),
       JSON.stringify(identity),
       JSON.stringify(policy),
       now,
