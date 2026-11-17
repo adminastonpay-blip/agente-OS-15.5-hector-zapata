@@ -55,7 +55,10 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
       };
 
       try {
-        const received = await (step.waitForEvent as any)("await-human-review", { type: "extraction.reviewed", timeout: "24 hours" }) as { payload: { corrections: Record<string, unknown>; reviewer: string } };
+        const received = await (step.waitForEvent as any)(
+          "await-human-review",
+          { type: "extraction.reviewed", timeout: "24 hours" }
+        ) as { payload: { corrections: Record<string, unknown>; reviewer: string } };
         approval = received.payload;
       } catch {
         approval = { corrections: {}, reviewer: "timeout-auto-reject" };
@@ -94,15 +97,12 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
       properties.__input_hash = inputHash;
       properties.__certified = true;
 
-      let objectId: string | undefined;
-      try {
-        objectId = await createObject(this.env, identity, {
-          type_id: "ot_certified_extraction",
-          properties,
-        });
-      } catch {
-        objectId = `obj_ext_${crypto.randomUUID()}`;
-      }
+      // A certificate must never point at a synthetic ID for an object that failed to persist.
+      // Let the workflow fail and retry/raise an operator-visible error instead.
+      const objectId = await createObject(this.env, identity, {
+        type_id: "ot_certified_extraction",
+        properties,
+      });
 
       return buildAndSignCertificate(this.env, {
         fields: allFields,
