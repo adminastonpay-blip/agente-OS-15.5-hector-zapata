@@ -33,7 +33,7 @@ export async function evaluateAiSafety(
       body: JSON.stringify({
         action: {
           tool,
-          args: { message_content: content.slice(0, 8000), message_length: content.length },
+          args: { message_content: content, message_length: content.length },
           context: { objective },
         },
         identity,
