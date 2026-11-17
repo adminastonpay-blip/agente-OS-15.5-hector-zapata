@@ -79,3 +79,10 @@ test("RAG ingestion and query embeddings require the shared AI preflight", () =>
   assert.match(query, /"rag_query_embedding"/);
   assert.match(query, /if \(!safety\.ok\)/);
 });
+
+test("decision inference screens retrieved RAG context before sending it to the model", () => {
+  const decide = v21.slice(v21.indexOf('path === "/v1/decide"'));
+  assert.match(decide, /RAG retrieved context before decision inference/);
+  assert.match(decide, /if \(!contextSafety\.ok\)/);
+  assert.ok(decide.indexOf("contextSafety") < decide.indexOf("const out = await chat"));
+});
