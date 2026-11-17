@@ -193,3 +193,22 @@ test("INTERLOCK-STATUS-001 / legitimate positive control: explicit allow reaches
   const body = await response.json() as any;
   assert.equal(body.status, "done");
 });
+
+test("INTERLOCK-UNAVAILABLE-001 / incompatible response contract must deny", async (t) => {
+  let calls = 0;
+  const trace: TraceEvent[] = [];
+  const safety = safetyBinding(async (request) => {
+    const body = await request.json() as any;
+    calls++;
+    const isTool = body.action.tool === "search";
+    trace.push({ phase: "interlock-response", tenant: body.identity.tenant, tool: body.action.tool, policy_id: "fixture-version-mismatch", policy_version: "contract-v99", status: "allowed", branch: "HTTP-200" });
+    return isTool
+      ? Response.json({ status: "allowed", contract_version: "99", policy: { id: "fixture-version-mismatch", version: "contract-v99", effect: "allow" } })
+      : allowedResponse("fixture-allow");
+  });
+  const { node, counters } = makeAgent(safety);
+  const response = await execute(node);
+  trace.push({ phase: "route-response", status: String(response.status), branch: counters.tool ? "tool-executed" : "tool-blocked" });
+  t.diagnostic(JSON.stringify({ policy: "fixture-version-mismatch; contract v99 unsupported by expected v1", context: { tenant: identity.tenant, actor: identity.actor, tool: "search" }, trace, counters }));
+  assert.equal(counters.tool, 0, "incompatible contract must fail closed");
+});
