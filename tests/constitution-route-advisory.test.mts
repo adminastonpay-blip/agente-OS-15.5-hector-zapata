@@ -42,7 +42,7 @@ describe("constitution check route — advisory trust boundary", () => {
     assert.equal(payload.authoritative, false);
     assert.equal(payload.input_source, "caller_supplied");
     assert.match(payload.warning, /does not authenticate the policy issuer/i);
-    assert.match(payload.warning, /does not authorize execution/i);
+    assert.match(payload.warning, /or authorize execution/i);
   });
 
   it("rejects a request with no constitution object", async () => {
