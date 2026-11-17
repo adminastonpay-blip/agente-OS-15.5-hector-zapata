@@ -17,6 +17,19 @@ export class AgentNode {
     while (attempts < 3) {
       attempts++;
       try {
+        const planGate = await this.safetyCheck(
+          identity,
+          { tool: "agent_model_plan", args: { goal_length: String(goal || "").length } },
+          { goal, role }
+        );
+        if (planGate.status !== "allowed") {
+          return Response.json({
+            result: "Model planning blocked by SafetyInterlock",
+            attempts,
+            status: planGate.status,
+            policy: planGate.policy,
+          }, planGate.status === "pending_approval" ? 202 : 503);
+        }
         const calls = await this.planTools(role, goal, context, tools);
         const obs: string[] = [];
         const blocked: any[] = [];
@@ -45,6 +58,20 @@ export class AgentNode {
           }
         }
 
+        const synthGate = await this.safetyCheck(
+          identity,
+          { tool: "agent_model_synthesis", args: { goal_length: String(goal || "").length } },
+          { goal, role }
+        );
+        if (synthGate.status !== "allowed") {
+          return Response.json({
+            result: "Model synthesis blocked by SafetyInterlock",
+            attempts,
+            status: synthGate.status,
+            policy: synthGate.policy,
+            blocked,
+          }, synthGate.status === "pending_approval" ? 202 : 503);
+        }
         const answer = await this.synthesize(identity, role, goal, context, obs);
         const status = blocked.some((b) => b.status === "pending_approval")
           ? "partial_pending_approval"
@@ -71,11 +98,7 @@ export class AgentNode {
     ctx: { goal: string; role: string }
   ) {
     if (!this.env.SAFETY) {
-      // reason-only tools allowed without interlock; writes fail-closed
-      if (call.tool === "write") {
-        return { status: "denied" as const, policy: { reasons: ["SAFETY DO missing"] } };
-      }
-      return { status: "allowed" as const };
+      return { status: "denied" as const, policy: { reasons: ["SAFETY DO missing — fail-closed"] } };
     }
     try {
       const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity.tenant));
