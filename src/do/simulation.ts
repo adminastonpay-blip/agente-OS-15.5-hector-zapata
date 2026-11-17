@@ -25,10 +25,31 @@ export class SimulationTwin {
     }
   }
 
+  private async safetyCheck(identity: any, action: { tool: string; args: Record<string, unknown> }) {
+    if (!identity || !this.env.SAFETY) {
+      return { status: "denied" as const, policy: { reasons: ["SafetyInterlock or verified identity missing — fail-closed"] } };
+    }
+    try {
+      const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity.tenant));
+      const response = await stub.fetch("https://do/evaluate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, identity }),
+      });
+      if (!response.ok) return { status: "denied" as const, policy: { reasons: ["SafetyInterlock request failed"] } };
+      return await response.json<any>();
+    } catch {
+      return { status: "denied" as const, policy: { reasons: ["SafetyInterlock unavailable — fail-closed"] } };
+    }
+  }
+
   async fetch(req: Request): Promise<Response> {
     const u = new URL(req.url);
     if (u.pathname === "/init" && req.method === "POST") {
-      const { objects } = await req.json<any>();
+      const body = await req.json<any>();
+      const gate = await this.safetyCheck(body.identity, { tool: "simulation_init", args: { object_count: Array.isArray(body.objects) ? body.objects.length : 0 } });
+      if (gate.status !== "allowed") return Response.json({ error: "simulation_init_blocked", policy: gate.policy }, gate.status === "pending_approval" ? 202 : 503);
+      const { objects } = body;
       const list = Array.isArray(objects) ? objects : [];
       for (const o of list) {
         this.sql.exec(
@@ -42,6 +63,8 @@ export class SimulationTwin {
     }
     if (u.pathname === "/apply" && req.method === "POST") {
       const d = await req.json<any>();
+      const gate = await this.safetyCheck(d.identity, { tool: "commit_simulation", args: { op: d.op, payload: d.payload ?? {} } });
+      if (gate.status !== "allowed") return Response.json({ error: "simulation_apply_blocked", approval_id: gate.approval_id, policy: gate.policy }, gate.status === "pending_approval" ? 202 : 403);
       const before = this.sql
         .exec("SELECT properties FROM snap WHERE id = ?", d.payload?.id)
         .toArray()[0];
@@ -68,6 +91,8 @@ export class SimulationTwin {
     }
     if (u.pathname === "/evaluate" && req.method === "POST") {
       const body = await req.json<any>();
+      const gate = await this.safetyCheck(body.identity, { tool: "simulation_evaluate", args: { question_length: String(body.question || body.scenario || body.message || "").length } });
+      if (gate.status !== "allowed") return Response.json({ error: "simulation_evaluation_blocked", policy: gate.policy }, gate.status === "pending_approval" ? 202 : 503);
       const question = body.question || body.scenario || body.message || "Evaluate risks";
       const snap = this.sql.exec("SELECT * FROM snap").toArray();
       const deltas = this.sql.exec("SELECT * FROM deltas").toArray();
@@ -114,6 +139,8 @@ Analiza impacto, riesgos y recomendación. Sé breve.`;
     }
     if (u.pathname === "/commit" && req.method === "POST") {
       const { identity } = await req.json<any>();
+      const gate = await this.safetyCheck(identity, { tool: "commit_simulation", args: { action: "commit_all_pending_deltas" } });
+      if (gate.status !== "allowed") return Response.json({ error: "simulation_commit_blocked", approval_id: gate.approval_id, policy: gate.policy }, gate.status === "pending_approval" ? 202 : 403);
       if (!["confidential", "secret"].includes(identity?.clearance)) {
         return Response.json({ error: "insufficient clearance" }, { status: 403 });
       }
