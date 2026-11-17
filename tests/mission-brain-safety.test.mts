@@ -14,6 +14,10 @@ test("MissionBrain cannot mutate Cloudflare load balancer pools", () => {
   assert.match(source, /manual_action_required/);
 });
 
+test("MissionBrain has no remaining unguarded verification probe", () => {
+  assert.doesNotMatch(source, /private async verify\(/);
+});
+
 test("MissionBrain blocks recovery probes unless origin is allowlisted", () => {
   assert.match(source, /isAllowedRecoveryOrigin\(m\.origin, this\.env\.RECOVERY_ALLOWED_ORIGINS\)/);
   assert.match(source, /origin_not_allowlisted/);
