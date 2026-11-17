@@ -11,7 +11,7 @@
  */
 
 import type { Env, Identity } from "../types";
-import { evaluatePolicy, type ProposedAction, type PolicyResult } from "../safety/policy";
+import { evaluatePolicy, redactActionForPersistence, type ProposedAction, type PolicyResult } from "../safety/policy";
 import { emitLineage } from "../lineage";
 import { hashAuditRecord, verifyAuditChain } from "../security/audit-chain";
 import { sha256Hex, writeImmutableCheckpoint, verifyExternalOtsAnchor } from "../security/audit-anchor";
@@ -364,7 +364,7 @@ export class SafetyInterlock {
        (id, action_json, identity_json, policy_json, created_at, expires_at, status)
        VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
       id,
-      JSON.stringify(action),
+      JSON.stringify(redactActionForPersistence(action)),
       JSON.stringify(identity),
       JSON.stringify(policy),
       now,

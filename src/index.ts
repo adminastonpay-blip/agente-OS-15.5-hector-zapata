@@ -31,6 +31,7 @@ import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
 import { checkRequestRateLimit, enforceRequestBodyLimit } from "./security/request-guard";
 import { sessionStorageKey } from "./security/session-key";
+import { evaluateAiSafety } from "./security/ai-safety";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -139,40 +140,14 @@ async function enforceChatSafety(
   message: string,
   identity: Awaited<ReturnType<typeof resolveIdentity>>
 ): Promise<{ ok: true } | { ok: false; status: number; error: string; policy?: unknown }> {
-  // SafetyInterlock is mandatory in every deployment. Missing or failing bindings deny the request.
-  if (!env.SAFETY) return { ok: false, status: 503, error: "chat_safety_binding_unavailable" };
-
-  try {
-    const stub = env.SAFETY.get(env.SAFETY.idFromName("aston-chat-safety"));
-    const response = await stub.fetch("https://do/evaluate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: {
-          tool: "chat_completion",
-          args: { message_length: message.length },
-          context: { objective: "staging chat request" },
-        },
-        identity,
-      }),
-    });
-    const result = await response.json<any>().catch(() => ({}));
-    if (!response.ok || result.status !== "allowed") {
-      return {
-        ok: false,
-        status: response.ok ? 403 : 503,
-        error: result.status === "pending_approval"
-          ? "chat_requires_human_approval"
-          : result.status === "denied"
-            ? "chat_denied_by_safety_policy"
-            : "chat_safety_evaluation_failed",
-        policy: result.policy,
-      };
-    }
-    return { ok: true };
-  } catch {
-    return { ok: false, status: 503, error: "chat_safety_unavailable" };
-  }
+  const result = await evaluateAiSafety(
+    env,
+    identity,
+    "chat_completion",
+    message,
+    "ASTON chat completion"
+  );
+  return result.ok ? { ok: true } : result;
 }
 
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
@@ -247,6 +222,9 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
       (typeof body.message === "string" && body.message.trim()) ||
       "";
     if (!text) return json({ ok: false, error: "text requerido" }, 400);
+    const identity = await resolveIdentity(req, env);
+    const safety = await evaluateAiSafety(env, identity, "tts_synthesis", text, "Text-to-speech synthesis");
+    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
     const lang = (typeof body.language === "string" ? body.language : "es").toLowerCase();
     const preferred =
       typeof body.model === "string" && body.model.startsWith("@cf/")
@@ -282,6 +260,9 @@ async function handleVoice(req: Request, env: Env): Promise<Response> {
     const profileKey = String(body.profile || body.voice || "aston_executive").toLowerCase();
     const profile = VOICE_PROFILES[profileKey] || VOICE_PROFILES.aston_executive;
     const spoken = applyVoicePersonality(text, profile.pace);
+    const identity = await resolveIdentity(req, env);
+    const safety = await evaluateAiSafety(env, identity, "voice_synthesis", spoken, "Voice synthesis");
+    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
     const preferred =
       typeof body.model === "string" && body.model.startsWith("@cf/") ? body.model : profile.model;
     const { binary, model, raw } = await runTts(env as Env & { AI: Ai }, spoken, preferred);
