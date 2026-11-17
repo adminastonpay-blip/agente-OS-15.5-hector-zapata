@@ -21,6 +21,14 @@ Scope: read-only account inspection plus repository review. No Cloudflare resour
 - Enabled Worker traces in addition to observability logs.
 - No production configuration, secrets, DNS, routes, resources, or deployed versions were modified.
 
+## Additional runtime configuration discrepancy (read-only check)
+
+The Worker settings endpoint for the deployed script returned `observability.enabled = false` and an empty `bindings` array, while the repository declares AI, D1, Queue and Durable Object bindings and staging enables observability. This settings response alone may not enumerate all version-level bindings; compare the active deployed version metadata and script configuration before treating it as proof that bindings are absent. The deployed observability setting is explicitly reported as disabled and should be reconciled in a controlled staging rollout first.
+
+The repository includes `schema.sql` with the expected `documents`, `lineage_events`, ontology, decision, access-control and audit tables. No migration has been applied because the intended production D1 database is unresolved. The existing `db1` has zero tables and must not be assumed to be the correct target.
+
+The Queue consumer code is not wired to the Worker export, and repository search found no active `.send()` producer calls. The configured queue is therefore not an operational pipeline yet. The current consumer expects mission payloads and calls the Supervisor Durable Object, whereas the ETL handler expects a separate document-job schema and both DB and Vectorize. Do not attach either handler to the same queue until message types, producers, retry/dead-letter policy and idempotency are designed and tested.
+
 ## Required order before production release
 1. Identify the correct production D1 database and inspect its tables/migrations.
 2. Enable R2 and choose separate staging and production buckets with the required retention/immutability controls.
