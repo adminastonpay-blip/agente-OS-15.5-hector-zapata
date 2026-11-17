@@ -118,12 +118,4 @@ export class MissionBrain {
     };
   }
 
-  private async verify(m: Mission) {
-    try {
-      const r = await fetch(m.origin, { method: "HEAD", signal: AbortSignal.timeout(3000) });
-      return r.ok;
-    } catch {
-      return false;
-    }
-  }
 }
