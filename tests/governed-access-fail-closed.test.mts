@@ -48,7 +48,7 @@ function environment(effect: "allow" | "deny" | "require_approval", action: "cre
           return null;
         },
         async run() {
-          writes.push(sql.trim().split(/\\s+/).slice(0, 4).join(" "));
+          writes.push(sql.trim().split(/\s+/).slice(0, 4).join(" "));
           return { success: true, meta: { changes: 1 } };
         },
       };
