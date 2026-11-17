@@ -7,6 +7,7 @@ import { createObjectType, createObject, createLink, cascadeImpact } from "../on
 import { emitLineage, getLineageTree } from "../lineage";
 import { maskForAgent } from "../pii";
 import { embed, chat, chunk } from "../lib/ai";
+import { evaluateAiSafety } from "../security/ai-safety";
 
 export function pillarStatus(env: Env) {
   return {
@@ -286,23 +287,15 @@ export async function handleV21(
     const body = await req.json<any>().catch(() => ({}));
     const message = String(body.message || body.objective || "").trim();
     if (!message) return json({ ok: false, error: "message required" }, 400);
-    if (!env.SAFETY) return json({ ok: false, error: "decision_safety_binding_unavailable" }, 503);
-    try {
-      const safetyStub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
-      const safetyResponse = await safetyStub.fetch("https://do/evaluate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: { tool: "decision_inference", args: { message_length: message.length }, context: { objective: "ASTON decision request" } },
-          identity,
-        }),
-      });
-      const safetyResult = await safetyResponse.json<any>().catch(() => ({}));
-      if (!safetyResponse.ok || safetyResult.status !== "allowed") {
-        return json({ ok: false, error: "decision_blocked_by_safety_interlock", policy: safetyResult.policy }, safetyResponse.ok ? 403 : 503);
-      }
-    } catch {
-      return json({ ok: false, error: "decision_safety_unavailable" }, 503);
+    const safety = await evaluateAiSafety(
+      env,
+      identity,
+      "decision_inference",
+      message,
+      "ASTON decision inference"
+    );
+    if (!safety.ok) {
+      return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
     }
     let context = "";
     if (env.VECTORIZE && env.AI) {
