@@ -51,6 +51,11 @@ export class AgentNode {
             });
             continue;
           }
+          if (gate.status !== "allowed") {
+            obs.push(`[${c.tool}] DENIED: invalid SafetyInterlock decision status`);
+            blocked.push({ tool: c.tool, status: "denied", policy: { reasons: ["invalid SafetyInterlock decision status"] } });
+            continue;
+          }
           try {
             obs.push(`[${c.tool}] ${await this.runTool(identity, c)}`);
           } catch (e) {
@@ -96,14 +101,25 @@ export class AgentNode {
     identity: any,
     call: { tool: string; args: Record<string, unknown> },
     ctx: { goal: string; role: string }
-  ) {
-    if (!this.env.SAFETY) {
-      return { status: "denied" as const, policy: { reasons: ["SAFETY DO missing — fail-closed"] } };
-    }
+  ): Promise<{
+    status: "allowed" | "denied" | "pending_approval";
+    approval_id?: string;
+    policy?: { reasons?: string[] };
+  }> {
+    const denied = (reason: string) => ({
+      status: "denied" as const,
+      policy: { reasons: [reason] },
+    });
+    if (!this.env.SAFETY) return denied("SAFETY DO missing — fail-closed");
+
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity.tenant));
-      const res = await stub.fetch("https://do/evaluate", {
+      const request = stub.fetch("https://do/evaluate", {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           action: {
             tool: call.tool,
@@ -112,20 +128,39 @@ export class AgentNode {
           },
           identity,
         }),
+      }).then(async (res) => {
+        if (!res.ok) return denied("SafetyInterlock request failed — fail-closed");
+        const payload = await res.json() as any;
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          return denied("SafetyInterlock response malformed — fail-closed");
+        }
+        if (payload.contract_version !== "1") {
+          return denied("SafetyInterlock contract version unsupported — fail-closed");
+        }
+        if (!["allowed", "denied", "pending_approval"].includes(payload.status)) {
+          return denied("SafetyInterlock decision status invalid — fail-closed");
+        }
+        if (payload.status === "pending_approval" &&
+            (typeof payload.approval_id !== "string" || !payload.approval_id)) {
+          return denied("SafetyInterlock approval reference missing — fail-closed");
+        }
+        return payload as {
+          status: "allowed" | "denied" | "pending_approval";
+          approval_id?: string;
+          policy?: { reasons?: string[] };
+        };
       });
-      if (!res.ok) {
-        return { status: "denied" as const, policy: { reasons: ["SafetyInterlock request failed — fail-closed"] } };
-      }
-      return (await res.json()) as {
-        status: "allowed" | "denied" | "pending_approval";
-        approval_id?: string;
-        policy?: { reasons?: string[] };
-      };
+      const deadline = new Promise<ReturnType<typeof denied>>((resolve) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          resolve(denied("SafetyInterlock evaluation timed out — fail-closed"));
+        }, 2000);
+      });
+      return await Promise.race([request, deadline]);
     } catch {
-      return {
-        status: "denied" as const,
-        policy: { reasons: ["SafetyInterlock unavailable — fail-closed"] },
-      };
+      return denied("SafetyInterlock unavailable — fail-closed");
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 
