@@ -30,6 +30,7 @@ import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
 import { checkRequestRateLimit, enforceRequestBodyLimit } from "./security/request-guard";
+import { sessionStorageKey } from "./security/session-key";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -80,15 +81,19 @@ const SYSTEM_SOLVE =
 async function loadHistory(
   env: Env,
   session_id: string,
-  body: any
+  body: any,
+  identity: Awaited<ReturnType<typeof resolveIdentity>>
 ): Promise<{ stub: DurableObjectStub | null; history: any[] }> {
   let history: any[] = [];
   let stub: DurableObjectStub | null = null;
 
   // Soft-fail if SESSION binding is not available (deploy without DOs still serves chat)
-  if (env.SESSION) {
+  // Anonymous chat never persists history. Authenticated sessions are namespaced
+  // by tenant + verified actor + caller session id to prevent cross-user collisions.
+  if (env.SESSION && identity.method !== "public") {
     try {
-      stub = env.SESSION.get(env.SESSION.idFromName(session_id));
+      const storageKey = await sessionStorageKey(identity, session_id);
+      stub = env.SESSION.get(env.SESSION.idFromName(storageKey));
       const mem = await (await stub.fetch("https://do/get")).json<{ history: any[] }>();
       history = mem.history ?? [];
     } catch {
@@ -196,7 +201,7 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
     const identity = await resolveIdentity(req, env);
     const safety = await enforceChatSafety(env, message, identity);
     if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
-    const { stub, history } = await loadHistory(env, session_id, body);
+    const { stub, history } = await loadHistory(env, session_id, body, identity);
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
       ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
@@ -251,7 +256,8 @@ async function handleChatStream(req: Request, env: Env): Promise<Response> {
         ? body.session_id.slice(0, 80)
         : "default";
     const useDeep = body.mode === "deep" || body.deep === true;
-    const { stub, history } = await loadHistory(env, session_id, body);
+    const identity = await resolveIdentity(req, env);
+    const { stub, history } = await loadHistory(env, session_id, body, identity);
     const messages = [
       { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
       ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
