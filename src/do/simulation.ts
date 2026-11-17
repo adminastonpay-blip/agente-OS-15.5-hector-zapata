@@ -36,8 +36,12 @@ export class SimulationTwin {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action, identity }),
       });
-      if (!response.ok) return { status: "denied" as const, policy: { reasons: ["SafetyInterlock request failed"] } };
-      return await response.json<any>();
+      if (!response.ok) return { status: "denied" as const, policy: { reasons: ["SafetyInterlock request failed — fail-closed"] } };
+      const result = await response.json<any>();
+      if (!result || !["allowed", "denied", "pending_approval"].includes(result.status)) {
+        return { status: "denied" as const, policy: { reasons: ["SafetyInterlock returned an invalid decision"] } };
+      }
+      return result;
     } catch {
       return { status: "denied" as const, policy: { reasons: ["SafetyInterlock unavailable — fail-closed"] } };
     }
