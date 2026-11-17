@@ -335,6 +335,21 @@ export async function handleV21(
         /* ignore */
       }
     }
+    if (context) {
+      const contextSafety = await evaluateAiSafety(
+        env,
+        identity,
+        "decision_inference",
+        context,
+        "RAG retrieved context before decision inference"
+      );
+      if (!contextSafety.ok) {
+        return json(
+          { ok: false, error: contextSafety.error, policy: contextSafety.policy },
+          contextSafety.status
+        );
+      }
+    }
     const out = await chat(env, [
       {
         role: "system",
