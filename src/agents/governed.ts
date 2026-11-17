@@ -53,7 +53,7 @@ export async function createPlan(
     object_type: "agent_plan",
     purpose: "agent",
   });
-  if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
+  if (access.effect !== "allow") throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const agent_id = String(input.agent_id ?? "default-agent").slice(0, 64);
   const envelope =
@@ -217,7 +217,7 @@ export async function approvePlan(
     purpose: "agent",
     resource_id: planId,
   });
-  if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
+  if (access.effect !== "allow") throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const status = input.approve ? "approved" : "rejected";
   await env.DB.prepare(
@@ -253,7 +253,7 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     purpose: "agent",
     resource_id: planId,
   });
-  if (access.effect === "deny") throw new Error(`access_denied:${access.reason}`);
+  if (access.effect !== "allow") throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const humanApproved = true; // status approved implies human (or auto-approved path)
 
