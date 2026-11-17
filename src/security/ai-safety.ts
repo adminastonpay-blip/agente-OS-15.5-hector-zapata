@@ -25,6 +25,9 @@ export async function evaluateAiSafety(
   if (typeof content !== "string" || !content.trim()) {
     return { ok: false, status: 400, error: "ai_safety_content_required" };
   }
+  if (content.length > 8000) {
+    return { ok: false, status: 413, error: "ai_safety_content_too_large" };
+  }
   try {
     const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
     const response = await stub.fetch("https://do/evaluate", {
