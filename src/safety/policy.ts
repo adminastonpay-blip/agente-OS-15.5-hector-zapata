@@ -40,6 +40,26 @@ const HIGH_RISK_TOOLS = new Set([
   "code_certify",
 ]);
 
+const AI_INPUT_TOOLS = new Set([
+  "chat_completion",
+  "decision_inference",
+  "recovery_hypothesis",
+  "tts_synthesis",
+  "voice_synthesis",
+]);
+
+/** Deterministic high-confidence prompt-injection indicators; not a semantic classifier. */
+export function containsPromptInjection(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const patterns = [
+    /\b(ignore|disregard|override|bypass)\s+(all\s+)?(previous|prior|system|developer)\s+(instructions|rules|messages)\b/i,
+    /\b(reveal|print|show|exfiltrate)\s+(the\s+)?(system prompt|developer message|api keys?|credentials|secrets)\b/i,
+    /\b(you are now|act as)\s+(an?\s+)?(unrestricted|unfiltered|jailbroken)\b/i,
+    /<\|(?:system|developer|im_start|im_sep)\|>/i,
+  ];
+  return patterns.some((pattern) => pattern.test(value));
+}
+
 const CRITICAL_TOOLS = new Set([
   "disable_pool",
   "failover",
@@ -89,6 +109,14 @@ function riskFromScore(score: number): RiskLevel {
 
 export function evaluatePolicy(action: ProposedAction, identity: Identity): PolicyResult {
   const score = scoreRisk(action, identity);
+  if (AI_INPUT_TOOLS.has(action.tool) && containsPromptInjection(action.args?.message_content)) {
+    return {
+      decision: "deny",
+      risk: "high",
+      score: Math.max(score, 70),
+      reasons: ["High-confidence prompt-injection pattern detected in supplied content"],
+    };
+  }
   const risk = riskFromScore(score);
   const reasons: string[] = [];
 
