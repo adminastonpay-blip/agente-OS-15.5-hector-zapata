@@ -159,7 +159,9 @@ export class Supervisor {
     identity: any,
     action: { tool: string; args: Record<string, unknown>; context?: any }
   ) {
-    if (!this.env.SAFETY) return { status: "allowed" as const };
+    if (!this.env.SAFETY) {
+      return { status: "denied" as const, policy: { reasons: ["SafetyInterlock missing — fail-closed"] } };
+    }
     try {
       const stub = this.env.SAFETY.get(this.env.SAFETY.idFromName(identity?.tenant || "default"));
       const res = await stub.fetch("https://do/evaluate", {
