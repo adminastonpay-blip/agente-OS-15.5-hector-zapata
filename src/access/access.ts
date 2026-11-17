@@ -4,6 +4,11 @@ import { emitLineage } from "../lineage";
 export type AccessAction = "read" | "create" | "update" | "delete" | "execute";
 export type AccessEffect = "allow" | "deny" | "require_approval";
 
+/** Only an explicit allow is an authorization grant. */
+export function isExplicitAccessAllow(effect: unknown): effect is "allow" {
+  return effect === "allow";
+}
+
 const CLEARANCE_RANK: Record<string, number> = {
   public: 0,
   internal: 1,
