@@ -1,5 +1,5 @@
 import type { Env, Mission } from "../types";
-import { maskForAgent, restoreFromVault } from "../pii";
+import { isAllowedRecoveryOrigin } from "../security/recovery-guard";
 
 export class MissionBrain {
   private sql: SqlStorage;
@@ -45,37 +45,13 @@ export class MissionBrain {
     const diag = await this.diagnose(m);
     this.log("diagnose", "edge_probe", diag.reachable ? "ok" : "failed", JSON.stringify(diag));
 
-    const prompt = `Misión recuperación. Origen: ${m.origin}. Error: ${m.error_code}. Pool: ${m.pool_id}. Diag: ${JSON.stringify(diag)}.
-JSON SOLO:
-{"text":"<hipótesis>","confidence":0.0-1.0,"action":"restart|drain|failover|isolate|none"}`;
-    const secret = this.env.PII_HMAC_SECRET || "aston-edge-default-pii";
-    const { masked, vault } = await maskForAgent(prompt, "internal", secret);
-    let res: any;
-    const ai = this.env.AI;
-    if (ai) {
-      try {
-        res = await ai.run(this.env.CHAT_MODEL as any, {
-          messages: [{ role: "user", content: masked }],
-        } as any);
-      } catch (e: any) {
-        res = { response: JSON.stringify({ text: "Workers AI no disponible; se conserva diagnóstico sin recomendación automática.", confidence: 0.2, action: "none", error: String(e?.message || e).slice(0, 120) }) };
-      }
-    } else {
-      res = { response: JSON.stringify({ text: "Workers AI binding no configurado; se conserva diagnóstico sin recomendación automática.", confidence: 0.2, action: "none" }) };
-    }
-    const textOut =
-      typeof res?.response === "string"
-        ? res.response
-        : typeof res === "string"
-          ? res
-          : JSON.stringify(res);
-    const real = restoreFromVault(textOut, vault);
-    let hypothesis: any;
-    try {
-      hypothesis = JSON.parse(real.replace(/```json|```/g, "").trim());
-    } catch {
-      hypothesis = { text: real, confidence: 0.5, action: "none" };
-    }
+    // Model-driven remediation is intentionally disabled in this legacy path.
+    // A human must review the diagnosis before any infrastructure action is taken.
+    const hypothesis = {
+      text: "Diagnóstico automático deshabilitado; requiere revisión humana.",
+      confidence: 0,
+      action: "none",
+    };
     this.sql.exec(
       "INSERT INTO hypothesis (ts, text, confidence, status) VALUES (?, ?, ?, 'open')",
       Date.now(),
@@ -111,6 +87,15 @@ JSON SOLO:
 
   private async diagnose(m: Mission) {
     const t0 = Date.now();
+    if (!isAllowedRecoveryOrigin(m.origin, this.env.RECOVERY_ALLOWED_ORIGINS)) {
+      return {
+        reachable: false,
+        status: 0,
+        latency_ms: 0,
+        degraded: false,
+        blocked: "origin_not_allowlisted",
+      };
+    }
     try {
       const r = await fetch(m.origin, { method: "HEAD", signal: AbortSignal.timeout(3000) });
       return {
@@ -124,22 +109,13 @@ JSON SOLO:
     }
   }
 
-  private async containAndRestore(m: Mission, h: any) {
-    if ((h.action === "failover" || m.severity === "critical") && (this.env as any).CF_API_TOKEN) {
-      const r = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${(this.env as any).CF_ACCOUNT_ID}/load_balancers/pools/${m.pool_id}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${(this.env as any).CF_API_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ enabled: false }),
-        }
-      );
-      return { name: "disable_pool", status: r.ok ? "ok" : "failed", detail: `status=${r.status}` };
-    }
-    return { name: "no_op", status: "ok", detail: h.action };
+  private async containAndRestore(_m: Mission, _h: any) {
+    // No automatic Cloudflare API mutations are permitted from MissionBrain.
+    return {
+      name: "manual_action_required",
+      status: "blocked",
+      detail: "Automated infrastructure mutation is disabled; operator review and an independently authorized change are required.",
+    };
   }
 
   private async verify(m: Mission) {
