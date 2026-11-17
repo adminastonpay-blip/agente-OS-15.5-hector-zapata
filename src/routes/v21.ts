@@ -225,6 +225,7 @@ export async function handleV21(
       severity: body.severity || "low",
       created_at: Date.now(),
       created_by: identity.actor,
+      identity,
     };
     const stub = env.MISSION.get(env.MISSION.idFromName(mission.id));
     const res = await stub.fetch("https://do/run", {
