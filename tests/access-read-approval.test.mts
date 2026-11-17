@@ -22,7 +22,7 @@ function database(effect: "allow" | "require_approval") {
     clearance: "*",
     effect,
     row_filter: null,
-    restricted_fields: [],
+    restricted_fields: "[]",
     priority: 100,
   };
   const record = {
