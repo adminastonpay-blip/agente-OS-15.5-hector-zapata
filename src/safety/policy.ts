@@ -107,6 +107,19 @@ function riskFromScore(score: number): RiskLevel {
   return "low";
 }
 
+/** Remove user-supplied prompt text before storing a pending approval record. */
+export function redactActionForPersistence(action: ProposedAction): ProposedAction {
+  if (typeof action.args?.message_content !== "string") return action;
+  return {
+    ...action,
+    args: {
+      ...action.args,
+      message_content: "[redacted]",
+      message_length: action.args.message_content.length,
+    },
+  };
+}
+
 export function evaluatePolicy(action: ProposedAction, identity: Identity): PolicyResult {
   const score = scoreRisk(action, identity);
   if (AI_INPUT_TOOLS.has(action.tool) && containsPromptInjection(action.args?.message_content)) {
