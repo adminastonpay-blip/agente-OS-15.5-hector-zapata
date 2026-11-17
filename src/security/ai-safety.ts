@@ -4,8 +4,43 @@ export type AiSafetyResult =
   | { ok: true }
   | { ok: false; status: number; error: string; policy?: unknown };
 
+const AI_SAFETY_TOOLS = new Set([
+  "chat_completion",
+  "decision_inference",
+  "recovery_hypothesis",
+  "tts_synthesis",
+  "voice_synthesis",
+  "rag_ingest_embedding",
+  "rag_query_embedding",
+]);
+
+function isResolvedIdentity(identity: Identity | undefined): identity is Identity {
+  if (!identity || typeof identity.actor !== "string" || !identity.actor ||
+      typeof identity.tenant !== "string" || !identity.tenant ||
+      !Array.isArray(identity.roles) ||
+      !identity.roles.every((role) => typeof role === "string") ||
+      !["public", "internal", "confidential", "secret"].includes(identity.clearance) ||
+      !["access", "apikey", "sensor", "public"].includes(identity.method)) {
+    return false;
+  }
+
+  // Public routes may use only the canonical anonymous principal. A public
+  // identity must never be a caller-controlled way to claim another tenant/role.
+  if (identity.method === "public") {
+    return identity.actor === "public" &&
+      identity.tenant === "public" &&
+      identity.clearance === "public" &&
+      identity.roles.length === 1 &&
+      identity.roles[0] === "viewer";
+  }
+
+  return identity.actor !== "public" && identity.tenant !== "public";
+}
+
 /**
  * Mandatory preflight for model calls that consume user- or workflow-supplied text.
+ * The caller must pass the identity resolved by the API authentication boundary.
+ * Public endpoints may pass only the canonical anonymous principal.
  * Missing identity/binding, transport errors, and non-allow decisions fail closed.
  */
 export async function evaluateAiSafety(
@@ -15,11 +50,11 @@ export async function evaluateAiSafety(
   content: string,
   objective: string
 ): Promise<AiSafetyResult> {
-  if (!identity || typeof identity.actor !== "string" || !identity.actor ||
-      typeof identity.tenant !== "string" || !identity.tenant ||
-      !Array.isArray(identity.roles) ||
-      !["public", "internal", "confidential", "secret"].includes(identity.clearance)) {
-    return { ok: false, status: 503, error: "ai_safety_verified_identity_unavailable" };
+  if (!isResolvedIdentity(identity)) {
+    return { ok: false, status: 503, error: "ai_safety_resolved_identity_unavailable" };
+  }
+  if (!AI_SAFETY_TOOLS.has(tool)) {
+    return { ok: false, status: 503, error: "ai_safety_tool_not_allowlisted" };
   }
   if (!env.SAFETY) return { ok: false, status: 503, error: "ai_safety_binding_unavailable" };
   if (typeof content !== "string" || !content.trim()) {
@@ -47,7 +82,7 @@ export async function evaluateAiSafety(
     if (result.status !== "allowed") {
       return {
         ok: false,
-        status: result.status === "pending_approval" ? 403 : 403,
+        status: 403,
         error: result.status === "pending_approval"
           ? "ai_safety_requires_human_approval"
           : "ai_safety_denied",
