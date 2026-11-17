@@ -45,6 +45,11 @@ test("SimulationTwin gates reads and mutations, with critical changes requiring 
   assert.match(simulation, /this\.safetyCheck\(identity, \{ tool: "commit_simulation"/);
 });
 
+test("SimulationTwin fails closed on missing or failed interlock", () => {
+  assert.match(simulation, /SafetyInterlock or verified identity missing — fail-closed/);
+  assert.match(simulation, /SafetyInterlock request failed — fail-closed/);
+});
+
 test("chat output credential guard is unconditional", () => {
   assert.match(source, /if \(!isOutputSafeForCredentialLeak\(answer\)\)/);
 });
