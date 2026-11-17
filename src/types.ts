@@ -39,6 +39,8 @@ export interface Env {
   ACCESS_AUD?: string;
   CF_ACCOUNT_ID?: string;
   CF_API_TOKEN?: string;
+  /** Comma-separated HTTPS origins allowed for recovery HEAD probes. Empty means deny all. */
+  RECOVERY_ALLOWED_ORIGINS?: string;
 }
 
 export interface Identity {
