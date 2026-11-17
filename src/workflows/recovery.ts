@@ -2,6 +2,7 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from "cloudflare:work
 import type { Env, MissionParams } from "../types";
 import { maskForAgent, restoreFromVault } from "../pii";
 import { isAllowedRecoveryOrigin } from "../security/recovery-guard";
+import { evaluateAiSafety } from "../security/ai-safety";
 
 export class RecoveryWorkflow extends WorkflowEntrypoint<Env, MissionParams> {
   async run(event: WorkflowEvent<MissionParams>, step: WorkflowStep) {
@@ -39,8 +40,11 @@ export class RecoveryWorkflow extends WorkflowEntrypoint<Env, MissionParams> {
     }, async () => {
       const prompt = `Diag ${JSON.stringify(diag)} origen ${m.origin} err ${m.error_code}.
 JSON: {"text":"","confidence":0,"action":""}`;
+      const gate = await evaluateAiSafety(this.env, m.identity, "recovery_hypothesis", prompt, "Recovery workflow hypothesis generation");
+      if (!gate.ok) throw new Error(`recovery_ai_blocked:${gate.error}`);
+      if (!this.env.AI) throw new Error("recovery_ai_binding_unavailable");
       const { masked, vault } = await maskForAgent(prompt, "internal", this.env.PII_HMAC_SECRET!);
-      const res = await this.env.AI!.run(this.env.CHAT_MODEL as any,
+      const res = await this.env.AI.run(this.env.CHAT_MODEL as any,
         { messages: [{ role: "user", content: masked }] } as any,
         { gateway: { id: this.env.AI_GATEWAY_ID } } as any) as any;
       const real = restoreFromVault(String(res?.response ?? ""), vault);
