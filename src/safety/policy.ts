@@ -46,6 +46,8 @@ const AI_INPUT_TOOLS = new Set([
   "recovery_hypothesis",
   "tts_synthesis",
   "voice_synthesis",
+  "rag_ingest_embedding",
+  "rag_query_embedding",
 ]);
 
 /** Deterministic high-confidence prompt-injection indicators; not a semantic classifier. */

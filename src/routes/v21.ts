@@ -43,6 +43,21 @@ export async function handleV21(
     if (!env.AI) return json({ ok: false, error: "AI required" }, 503);
 
     const parts = chunk(text);
+    // Preflight every chunk before the first persistence or vector-store write.
+    // This avoids partially ingesting a document when a later chunk is denied.
+    for (const part of parts) {
+      const safety = await evaluateAiSafety(
+        env,
+        identity,
+        "rag_ingest_embedding",
+        part,
+        "RAG document embedding during ingestion"
+      );
+      if (!safety.ok) {
+        return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
+      }
+    }
+
     const ids: string[] = [];
     for (const part of parts) {
       const id = `doc_${crypto.randomUUID()}`;
@@ -86,6 +101,16 @@ export async function handleV21(
         matches: [],
         note: "VECTORIZE not bound — configure index knowledge-base to enable semantic search",
       });
+    }
+    const safety = await evaluateAiSafety(
+      env,
+      identity,
+      "rag_query_embedding",
+      q,
+      "RAG semantic query embedding"
+    );
+    if (!safety.ok) {
+      return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
     }
     try {
       const [qvec] = await embed(env, [q]);
@@ -308,6 +333,21 @@ export async function handleV21(
           .join("\n---\n");
       } catch {
         /* ignore */
+      }
+    }
+    if (context) {
+      const contextSafety = await evaluateAiSafety(
+        env,
+        identity,
+        "decision_inference",
+        context,
+        "RAG retrieved context before decision inference"
+      );
+      if (!contextSafety.ok) {
+        return json(
+          { ok: false, error: contextSafety.error, policy: contextSafety.policy },
+          contextSafety.status
+        );
       }
     }
     const out = await chat(env, [
