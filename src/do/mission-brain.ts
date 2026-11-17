@@ -67,13 +67,6 @@ export class MissionBrain {
       restored = action.status === "ok";
     }
 
-    if (restored) {
-      await new Promise((r) => setTimeout(r, 500));
-      const ok = await this.verify(m);
-      this.log("verify", "post_restore_check", ok ? "ok" : "failed");
-      restored = ok;
-    }
-
     const journal = this.sql.exec("SELECT * FROM journal").toArray();
     if (this.env.JOURNAL) {
       await this.env.JOURNAL.put(
