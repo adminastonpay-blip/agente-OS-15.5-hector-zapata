@@ -8,6 +8,7 @@ const supervisor = await readFile(new URL("../src/do/supervisor.ts", import.meta
 const agent = await readFile(new URL("../src/do/agent-node.ts", import.meta.url), "utf8");
 const simulation = await readFile(new URL("../src/do/simulation.ts", import.meta.url), "utf8");
 const recovery = await readFile(new URL("../src/workflows/recovery.ts", import.meta.url), "utf8");
+const aiSafety = await readFile(new URL("../src/security/ai-safety.ts", import.meta.url), "utf8");
 
 test("chat safety gate cannot be disabled by deployment flags", () => {
   const start = source.indexOf("async function enforceChatSafety(");
@@ -15,8 +16,10 @@ test("chat safety gate cannot be disabled by deployment flags", () => {
   assert.ok(start >= 0 && end > start, "chat safety function must exist");
   const gate = source.slice(start, end);
   assert.doesNotMatch(gate, /CHAT_SAFETY_ENFORCED|DEPLOY_PROFILE/);
-  assert.match(gate, /if \(!env\.SAFETY\)/);
-  assert.match(gate, /chat_safety_unavailable/);
+  assert.match(gate, /evaluateAiSafety/);
+  assert.match(aiSafety, /if \(!env\.SAFETY\)/);
+  assert.match(aiSafety, /ai_safety_unavailable/);
+  assert.match(aiSafety, /message_content: content\.slice/);
 });
 
 test("streaming remains fail-closed until buffered output inspection exists", () => {
