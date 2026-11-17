@@ -101,13 +101,25 @@ export async function createLink(
   l: { from_id: string; to_id: string; type: string; properties?: Record<string, unknown> }
 ) {
   if (!env.DB) throw new Error("DB binding required");
+  // A link is tenant-owned. Both endpoints must already belong to the
+  // caller's tenant; never create a cross-tenant nested reference.
+  const [fromObject, toObject] = await Promise.all([
+    env.DB.prepare("SELECT id FROM objects WHERE tenant = ? AND id = ?")
+      .bind(id.tenant, l.from_id).first(),
+    env.DB.prepare("SELECT id FROM objects WHERE tenant = ? AND id = ?")
+      .bind(id.tenant, l.to_id).first(),
+  ]);
+  if (!fromObject || !toObject) {
+    throw new Error("link endpoints must belong to caller tenant");
+  }
+
   const lid = `lnk_${crypto.randomUUID()}`;
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO links (id, from_id, to_id, type, properties, version, valid_from, created_at)
-     VALUES (?, ?, ?, ?, ?, 1, ?, ?)`
+    `INSERT INTO links (id, tenant, from_id, to_id, type, properties, version, valid_from, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
   )
-    .bind(lid, l.from_id, l.to_id, l.type, JSON.stringify(l.properties ?? {}), now, now)
+    .bind(lid, id.tenant, l.from_id, l.to_id, l.type, JSON.stringify(l.properties ?? {}), now, now)
     .run();
 
   await emitLineage(env, {
@@ -169,10 +181,10 @@ export async function cascadeImpact(
     for (const from of frontier) {
       const rows = await env.DB.prepare(
         `SELECT to_id, type FROM links
-         WHERE from_id = ? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)
+         WHERE tenant = ? AND from_id = ? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)
          LIMIT 50`
       )
-        .bind(from, atTs, atTs)
+        .bind(tenant, from, atTs, atTs)
         .all();
       for (const r of (rows.results ?? []) as any[]) {
         if (seen.has(r.to_id)) continue;
