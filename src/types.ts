@@ -61,6 +61,8 @@ export interface Mission {
   severity: "low" | "medium" | "high" | "critical";
   created_at: number;
   created_by: string;
+  /** Verified caller identity propagated to the workflow; absence blocks model use. */
+  identity?: Identity;
 }
 
 /** Payload for RecoveryWorkflow (optional Cloudflare Workflows). */
