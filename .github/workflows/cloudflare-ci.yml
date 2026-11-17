@@ -36,6 +36,9 @@ jobs:
       - name: TypeScript check
         run: npm run check
 
+      - name: Security regression tests
+        run: npm run test:security
+
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
 
