@@ -228,8 +228,16 @@ export async function secureReadObjects(
     purpose: options.purpose || "read",
   });
 
-  if (evaluation.effect === "deny") {
-    return { allowed: false, reason: evaluation.reason, items: [] };
+  // Only an explicit allow may release protected records. A pending approval
+  // is not an authorization to read; the data must remain undisclosed.
+  if (evaluation.effect !== "allow") {
+    return {
+      allowed: false,
+      effect: evaluation.effect,
+      reason: evaluation.reason,
+      decision_id: evaluation.decision_id,
+      items: [],
+    };
   }
 
   const limit = Math.min(options.limit ?? 100, 200);
