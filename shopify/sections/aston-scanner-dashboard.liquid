@@ -1,0 +1,183 @@
+{% comment %}
+  ASTON Enterprise Diagnostic — secure email delivery UI.
+  POST /v1/audit returns only ok + request_id (no findings in browser).
+  OpenSSF link: project ATI 16476 (process badge, not a scan certification).
+{% endcomment %}
+<section
+  id="aston-scan-{{ section.id }}"
+  class="aston-scan"
+  data-aston-scan
+  data-worker="{{ section.settings.worker_url | strip | escape }}"
+  data-health="{{ section.settings.health_path | default: '/health' | escape }}"
+  data-audit="{{ section.settings.audit_path | default: '/v1/audit' | escape }}"
+  data-timeout="{{ section.settings.timeout_seconds | default: 20 | times: 1000 }}"
+  style="--bg:{{ section.settings.background }};--panel:{{ section.settings.panel }};--ink:{{ section.settings.text_color }};--muted:{{ section.settings.muted_color }};--accent:{{ section.settings.accent }}"
+>
+  <div class="as-wrap">
+    <header class="as-hero">
+      <span class="as-eyebrow">ASTON OS · ENTERPRISE DIAGNOSTIC</span>
+      <h2>{{ section.settings.heading | escape }}</h2>
+      <p>{{ section.settings.description | escape }}</p>
+    </header>
+
+    <div class="as-console">
+      <form data-form>
+        <label for="as-url-{{ section.id }}">Dominio autorizado (HTTPS)</label>
+        <input id="as-url-{{ section.id }}" data-domain type="text" placeholder="https://empresa.com" required autocomplete="url">
+        <label for="as-email-{{ section.id }}">Email corporativo</label>
+        <input id="as-email-{{ section.id }}" data-email type="email" placeholder="cto@empresa.com" required autocomplete="email">
+        <button type="submit" data-submit><span data-btn-label>Solicitar reporte privado</span></button>
+        <p class="as-hint">El navegador no muestra hallazgos. El Worker genera un paquete de evidencia firmado (atestación no verificada hasta control independiente).</p>
+      </form>
+
+      <div data-run hidden>
+        <strong>Procesando…</strong>
+        <p data-run-msg>Validando alcance y ejecutando revisión pasiva.</p>
+      </div>
+
+      <div data-results hidden>
+        <span class="as-eyebrow">DELIVERY</span>
+        <h3>Reporte en camino</h3>
+        <p data-success-msg></p>
+        <p class="as-hint">Estado de atestación: <strong>No verificado</strong> (pendiente de control independiente). Revise su correo y carpeta de spam.</p>
+        <p class="as-hint">Referencia: <code data-request-id></code></p>
+        <a class="as-link" href="https://www.bestpractices.dev/projects/16476" target="_blank" rel="noopener noreferrer">Trust / OpenSSF Best Practices (ATI proyecto 16476) ↗</a>
+        <button type="button" data-reset>Nueva solicitud</button>
+      </div>
+
+      <p class="as-notice" data-notice role="status"></p>
+    </div>
+  </div>
+
+  <style>
+    #aston-scan-{{ section.id }}{background:var(--bg);color:var(--ink);padding:48px 16px;font-family:system-ui,sans-serif}
+    #aston-scan-{{ section.id }} .as-wrap{max-width:720px;margin:0 auto}
+    #aston-scan-{{ section.id }} .as-hero{margin-bottom:28px}
+    #aston-scan-{{ section.id }} .as-eyebrow{color:var(--accent);font-size:11px;letter-spacing:.12em;font-weight:700}
+    #aston-scan-{{ section.id }} h2{font-size:clamp(28px,4vw,40px);margin:12px 0}
+    #aston-scan-{{ section.id }} .as-console{background:var(--panel);border-radius:14px;padding:24px;border:1px solid color-mix(in srgb,var(--accent) 20%,transparent)}
+    #aston-scan-{{ section.id }} label{display:block;font-size:12px;font-weight:600;margin:12px 0 6px}
+    #aston-scan-{{ section.id }} input{width:100%;padding:12px;border-radius:8px;border:1px solid #ffffff22;background:#0003;color:var(--ink)}
+    #aston-scan-{{ section.id }} button{margin-top:16px;padding:12px 16px;border-radius:8px;border:0;background:var(--accent);color:#07111c;font-weight:700;cursor:pointer}
+    #aston-scan-{{ section.id }} .as-hint{color:var(--muted);font-size:12px;line-height:1.5;margin-top:10px}
+    #aston-scan-{{ section.id }} .as-link{color:var(--accent);font-size:13px;display:inline-block;margin:12px 0}
+    #aston-scan-{{ section.id }} [hidden]{display:none!important}
+  </style>
+
+  <script>
+  (function(){
+    var root = document.getElementById('aston-scan-{{ section.id }}');
+    if (!root || root.dataset.init) return;
+    root.dataset.init = '1';
+    var form = root.querySelector('[data-form]');
+    var domain = root.querySelector('[data-domain]');
+    var email = root.querySelector('[data-email]');
+    var run = root.querySelector('[data-run]');
+    var results = root.querySelector('[data-results]');
+    var notice = root.querySelector('[data-notice]');
+    var btnLabel = root.querySelector('[data-btn-label]');
+    var submit = root.querySelector('[data-submit]');
+    var reqIdEl = root.querySelector('[data-request-id]');
+    var successMsg = root.querySelector('[data-success-msg]');
+
+    function normalizeUrl(v) {
+      v = (v || '').trim();
+      if (!v) return null;
+      if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+      try {
+        var u = new URL(v);
+        if (u.protocol !== 'https:') return null;
+        if (u.username || u.password || u.hostname === 'localhost') return null;
+        return u.href;
+      } catch (e) { return null; }
+    }
+
+    root.querySelector('[data-reset]').addEventListener('click', function(){
+      results.hidden = true;
+      form.hidden = false;
+      notice.textContent = '';
+    });
+
+    form.addEventListener('submit', async function(ev){
+      ev.preventDefault();
+      var target = normalizeUrl(domain.value);
+      var mail = (email.value || '').trim();
+      if (!target) { notice.textContent = 'URL HTTPS pública inválida.'; return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) { notice.textContent = 'Email inválido.'; return; }
+
+      var base = (root.dataset.worker || '').replace(/\/$/, '');
+      var hp = root.dataset.health || '/health';
+      var ap = root.dataset.audit || '/v1/audit';
+      var limit = Math.max(5000, Math.min(Number(root.dataset.timeout) || 20000, 60000));
+      if (!/^https:\/\//i.test(base)) { notice.textContent = 'Configurá la URL HTTPS del Worker.'; return; }
+
+      submit.disabled = true;
+      btnLabel.textContent = 'Procesando…';
+      run.hidden = false;
+      results.hidden = true;
+      notice.textContent = '';
+
+      var c = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var t = setTimeout(function(){ if (c) c.abort(); }, limit);
+
+      try {
+        var h = await fetch(base + hp, { headers: { Accept: 'application/json' }, mode: 'cors', signal: c && c.signal });
+        if (!h.ok) throw new Error('Health HTTP ' + h.status);
+        var hj = await h.json();
+        if (!hj || hj.ok !== true) throw new Error('Health no ok');
+
+        var x = await fetch(base + ap, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          mode: 'cors',
+          signal: c && c.signal,
+          body: JSON.stringify({
+            target: target,
+            email: mail,
+            source: 'shopify-enterprise-diagnostic',
+            requested_at: new Date().toISOString()
+          })
+        });
+        var j = await x.json().catch(function(){ return null; });
+        if (!x.ok || !j || j.ok !== true) {
+          throw new Error((j && (j.error || j.message)) || ('HTTP ' + x.status));
+        }
+
+        form.hidden = true;
+        run.hidden = true;
+        results.hidden = false;
+        reqIdEl.textContent = j.request_id || '—';
+        successMsg.textContent = 'Reporte en camino. Estado de atestación: No verificado (pendiente de control independiente). Revise su correo. Entrega: ' + (j.delivery || 'desconocida') + '.';
+        notice.textContent = 'Solicitud aceptada.';
+      } catch (err) {
+        run.hidden = true;
+        notice.textContent = 'No se pudo completar: ' + String(err && err.message || err).slice(0, 200);
+      } finally {
+        clearTimeout(t);
+        submit.disabled = false;
+        btnLabel.textContent = 'Solicitar reporte privado';
+      }
+    });
+  })();
+  </script>
+</section>
+
+{% schema %}
+{
+  "name": "ASTON Scanner Dashboard",
+  "settings": [
+    { "type": "text", "id": "heading", "label": "Título", "default": "Diagnóstico empresarial privado" },
+    { "type": "textarea", "id": "description", "label": "Descripción", "default": "Solicitá una revisión pasiva autorizada. Los hallazgos no se muestran en pantalla; recibís un reporte vinculado a un request_id." },
+    { "type": "url", "id": "worker_url", "label": "Worker HTTPS URL" },
+    { "type": "text", "id": "health_path", "label": "Health path", "default": "/health" },
+    { "type": "text", "id": "audit_path", "label": "Audit path", "default": "/v1/audit" },
+    { "type": "range", "id": "timeout_seconds", "label": "Timeout (s)", "min": 5, "max": 60, "step": 5, "default": 25 },
+    { "type": "color", "id": "background", "label": "Fondo", "default": "#080D16" },
+    { "type": "color", "id": "panel", "label": "Panel", "default": "#101A29" },
+    { "type": "color", "id": "text_color", "label": "Texto", "default": "#F4F7FC" },
+    { "type": "color", "id": "muted_color", "label": "Muted", "default": "#A8B6C9" },
+    { "type": "color", "id": "accent", "label": "Acento", "default": "#76E4FF" }
+  ],
+  "presets": [{ "name": "ASTON Scanner Dashboard" }]
+}
+{% endschema %}

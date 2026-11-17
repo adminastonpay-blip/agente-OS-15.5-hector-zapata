@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aston.os/schemas/diagnostic-evidence/1.0.0",
+  "title": "ASTON Enterprise Diagnostic Evidence Package",
+  "description": "Subset of agent-attestation concepts for passive domain diagnostics. A valid document is not proof that claims about the target are true.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "issuer",
+    "target_domain",
+    "issued_at",
+    "claims",
+    "digests",
+    "signature",
+    "ots_status",
+    "attestation_status"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "diagnostic-evidence/1.0.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 64,
+      "pattern": "^req_[a-zA-Z0-9_-]+$"
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "target_domain": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "target_url": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "recipient_email_domain": {
+      "type": "string",
+      "description": "Email local-part must never be stored in the public package; only domain if needed for audit of match policy.",
+      "maxLength": 253
+    },
+    "issued_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "worker_version": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "scan_mode": {
+      "type": "string",
+      "const": "passive"
+    },
+    "claims": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "title"],
+        "properties": {
+          "id": { "type": "string", "maxLength": 64 },
+          "severity": { "type": "string", "enum": ["high", "medium", "low", "info"] },
+          "title": { "type": "string", "maxLength": 200 },
+          "description": { "type": "string", "maxLength": 1000 }
+        }
+      }
+    },
+    "digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claims_sha256"],
+      "properties": {
+        "claims_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "package_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "score_orientative": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Optional internal score; must not be returned on public /v1/audit response."
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alg", "value", "kid"],
+      "properties": {
+        "alg": { "type": "string", "const": "HMAC-SHA256" },
+        "value": { "type": "string", "minLength": 32, "maxLength": 128 },
+        "kid": { "type": "string", "maxLength": 32 }
+      }
+    },
+    "ots_status": {
+      "type": "string",
+      "enum": ["none", "pending", "submitted", "confirmed"]
+    },
+    "attestation_status": {
+      "type": "string",
+      "enum": ["unverified", "verified", "failed", "not_applicable"]
+    },
+    "disclaimer": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  }
+}

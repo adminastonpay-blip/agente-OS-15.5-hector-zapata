@@ -1,0 +1,64 @@
+name: ASTON AI Surface Scanner CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/ai-surface-scanner"]
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "src/scanner/**"
+      - "src/worker-app.ts"
+      - "src/index.ts"
+      - "sections/aston-scanner-dashboard.liquid"
+      - "shopify/sections/aston-scanner-dashboard.liquid"
+      - "tests/scanner.test.mts"
+      - "tests/fixtures/scanner-worker.ts"
+      - "tests/wrangler.scanner.toml"
+      - "src/security/request-guard.ts"
+      - "src/types.ts"
+      - "package.json"
+      - ".github/workflows/scanner-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scanner-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install project dependencies
+        run: npm install --ignore-scripts
+      - name: TypeScript validation
+        run: npm run check
+      - name: Scanner and existing security tests
+        run: npm run test:security
+      - name: Start local Miniflare via Wrangler
+        run: |
+          timeout 90s npx wrangler dev --config tests/wrangler.scanner.toml --local --ip 127.0.0.1 --port 8787 > /tmp/aston-scanner-miniflare.log 2>&1 &
+          echo $! > /tmp/aston-scanner-miniflare.pid
+          for i in $(seq 1 30); do
+            if curl --connect-timeout 1 --max-time 2 -sS -o /dev/null http://127.0.0.1:8787/; then break; fi
+            sleep 1
+          done
+          cat /tmp/aston-scanner-miniflare.log
+          kill -0 "$(cat /tmp/aston-scanner-miniflare.pid)"
+      - name: Miniflare endpoint smoke test (rejects loopback target)
+        run: |
+          code=$(curl -sS -o /tmp/scan-response.json -w "%{http_code}" -X POST http://127.0.0.1:8787/api/scan -H "Content-Type: application/json" --data '{"url":"http://127.0.0.1"}')
+          test "$code" = "400"
+          grep -q "invalid_target" /tmp/scan-response.json
+      - name: Miniflare /v1/audit requires matching email
+        run: |
+          code=$(curl -sS -o /tmp/audit-response.json -w "%{http_code}" -X POST http://127.0.0.1:8787/v1/audit -H "Content-Type: application/json" --data '{"target":"https://example.com","email":"not-matching@other.com"}')
+          test "$code" = "400"
+          grep -q "EMAIL_DOMAIN_MISMATCH\|email_domain" /tmp/audit-response.json
+      - name: Stop local Miniflare
+        if: always()
+        run: |
+          if [ -f /tmp/aston-scanner-miniflare.pid ]; then kill "$(cat /tmp/aston-scanner-miniflare.pid)" || true; fi
