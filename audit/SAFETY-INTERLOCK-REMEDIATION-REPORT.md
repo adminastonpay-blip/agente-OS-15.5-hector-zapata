@@ -14,6 +14,8 @@
 4. Tool execution requires the exact status `allowed`; every other status is denied.
 5. The real SafetyInterlock `/evaluate` endpoint now emits `contract_version: "1"`.
 6. Secure ontology reads now release data only for an explicit `allow`; `require_approval` returns no records.
+7. Ontology links now carry a tenant key; link creation verifies both endpoints belong to the caller tenant, and impact traversal filters by tenant.
+8. Added a D1 migration. Legacy links receive an empty tenant and are intentionally not traversable until mapped to an authoritative tenant.
 7. Added paired route-handler regression tests for sensitive-read approval block and operational-read allow.
 
 ## Regression matrix
@@ -29,16 +31,18 @@
 | Contract version 99 | Deny, no tool invocation | Included |
 | Sensitive read / require_approval | No protected records disclosed | Included |
 | Operational read / allow | Legitimate operational data returned | Included |
+| Cross-tenant nested link | Reject endpoint owned by another tenant; preserve same-tenant positive control | Included |
+| Same external root ID across tenant partitions | Impact route returns only that tenant's links | Included |
 
 ## Still not implemented / not verified
 
 The three tenant-boundary scenarios from the original plan remain open:
 
-- **TEN-01:** nested resource cross-tenant resolution through a real resource resolver and persistent fixture.
-- **TEN-02:** cryptographically valid token for a revoked/archived tenant, backed by an authoritative tenant lifecycle registry. Current authentication code validates JWT claims and cryptography but no authoritative tenant status lookup was identified in the reviewed path.
-- **TEN-03:** same resource ID under two tenants, tested through the actual resource route and tenant-scoped storage.
+- **TEN-01:** link creation and impact traversal are now tenant-scoped and have route/function regression coverage. CI and migration execution remain pending.
+- **TEN-02:** cryptographically valid token for a revoked/archived tenant remains NOT IMPLEMENTED. Authentication validates JWT cryptography/claims but no authoritative tenant lifecycle registry was identified. Adding a registry without a confirmed tenant provisioning and migration process could lock out existing tenants; this requires that source-of-truth decision.
+- **TEN-03:** impact traversal now scopes by tenant and has a same-external-ID positive partition test. A full database-level same-primary-key collision is not possible under the current global `objects.id PRIMARY KEY` schema; that storage invariant is not a substitute for testing every resource route.
 
-These are not counted as passing. The current repository evidence does not establish an authoritative tenant lifecycle table or a tenant-aware nested-link resolver suitable for safe implementation in this patch. They require a separate schema/route design and tests rather than a fabricated fixture.
+The D1 migration `migrations/20261117_tenant_scoped_links.sql` has NOT been applied to any database. Existing link rows receive tenant `''` and fail closed (they will no longer appear in tenant-scoped traversal) until an authorized owner maps them. Do not deploy this code before applying the migration and resolving legacy link ownership.
 
 ## Evidence rules
 
