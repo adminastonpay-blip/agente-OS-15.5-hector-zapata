@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateAiSafety } from "../src/security/ai-safety.ts";
-import { evaluatePolicy } from "../src/safety/policy.ts";
+import { evaluatePolicy, redactActionForPersistence } from "../src/safety/policy.ts";
 
 const identity = {
   actor: "test-operator",
@@ -82,4 +82,21 @@ test("policy allows ordinary chat content", () => {
     args: { message_content: "Please summarize this customer request." },
   }, identity);
   assert.equal(result.decision, "allow");
+});
+
+test("AI preflight rejects oversized content rather than inspecting only a prefix", async () => {
+  const result = await evaluateAiSafety(envWith(200, { status: "allowed" }), identity, "chat_completion", "x".repeat(8001), "test");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.status, 413);
+});
+
+test("pending approval persistence redacts supplied prompt text", () => {
+  const action = {
+    tool: "chat_completion",
+    args: { message_content: "private customer prompt", message_length: 23 },
+  };
+  const stored = redactActionForPersistence(action);
+  assert.equal(stored.args.message_content, "[redacted]");
+  assert.equal(stored.args.message_length, 23);
+  assert.equal(action.args.message_content, "private customer prompt");
 });
