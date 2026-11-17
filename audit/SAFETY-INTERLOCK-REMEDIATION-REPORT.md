@@ -6,7 +6,7 @@
 **Production / Cloudflare:** untouched.  
 **Merge status:** not merged.
 
-## Implemented in this branch — pending CI verification
+## Implemented in this branch — CI regression checks passed
 
 1. `AgentNode.safetyCheck()` now requires the SafetyInterlock response contract version `1`.
 2. Only the three documented decision statuses are accepted: `allowed`, `denied`, and `pending_approval`. A pending decision without an approval ID is rejected.
@@ -50,3 +50,18 @@ The D1 migration `migrations/20261117_tenant_scoped_links.sql` has NOT been appl
 - Synthetic Safety DO tests exercise the real AgentNode route but not the real Durable Object SQL/policy engine.
 - The authorization read tests exercise the actual `handleAccess` route handler and secure-read function using a deterministic D1 fixture; they do not claim a live Cloudflare D1 deployment.
 - No vulnerability is marked production-validated.
+
+## CI evidence — 2026-11-17
+
+**Final branch HEAD:** `dbfa447b6e7ed47e920ef86313f687e92f0add6a`
+
+- [ASTON OS Audit Staging Validation](https://github.com/adminastonpay-blip/agente-OS-15.5-hector-zapata/actions/runs/44182492533): SUCCESS.
+- [Cloudflare CI](https://github.com/adminastonpay-blip/agente-OS-15.5-hector-zapata/actions/runs/44182492665): SUCCESS. TypeScript check, security regression tests, production bundle dry-run and isolated staging bundle dry-run all succeeded.
+- Security regression suite: 19 safety tests passed; 52 existing security tests passed; 12 new targeted authorization/interlock/tenant-link tests passed; 0 failures.
+- Secret history scan: SUCCESS.
+- Dependency vulnerability audit: SUCCESS.
+- Cloudflare GitHub App preview checks: FAILURE because the configured Worker preview target reports that the Worker does not exist in the connected Cloudflare account. This is an integration/account-target failure, not a source test failure; no deployment was performed.
+
+## Validation boundary
+
+The CI results validate compilation, the dry-run bundles, and the automated fixtures in this repository. They do not prove live Durable Object behavior, live D1 migration application, production identity lifecycle enforcement, or deployment correctness. The tenant lifecycle case TEN-02 remains open. The D1 migration has not been applied.
