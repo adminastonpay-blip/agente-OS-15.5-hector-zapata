@@ -25,7 +25,7 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
       return hashInput(p.rawText ?? "", p.images ?? []);
     });
 
-    const extraction = await step.do(
+    const extraction = await (step.do as any)(
       "clairic-extract",
       {
         retries: { limit: 2, delay: "5 seconds" },
@@ -38,7 +38,7 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
           schema: p.schema,
         });
       }
-    );
+    ) as import("../extraction/types").ClairicResult;
 
     const { certified, needsReview } = partitionFields(
       extraction,
@@ -55,13 +55,8 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
       };
 
       try {
-        approval = await step.waitForEvent<{
-          corrections: Record<string, unknown>;
-          reviewer: string;
-        }>("await-human-review", {
-          type: "extraction.reviewed",
-          timeout: "24 hours",
-        });
+        const received = await (step.waitForEvent as any)("await-human-review", { type: "extraction.reviewed", timeout: "24 hours" }) as { payload: { corrections: Record<string, unknown>; reviewer: string } };
+        approval = received.payload;
       } catch {
         approval = { corrections: {}, reviewer: "timeout-auto-reject" };
       }
@@ -80,7 +75,7 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
       }
     }
 
-    const certificate = await step.do("certify-and-persist", async () => {
+    const certificate = await (step.do as any)("certify-and-persist", async () => {
       const identity = {
         actor: p.actor,
         method: "apikey" as const,
@@ -118,7 +113,7 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
         schemaVersion: p.schema_version ?? "v1",
         objectId,
       });
-    });
+    }) as import("../extraction/types").ExtractionCertificate;
 
     return {
       documentId: p.documentId,
