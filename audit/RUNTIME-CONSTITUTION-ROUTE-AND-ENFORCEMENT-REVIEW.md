@@ -85,7 +85,7 @@ The runtime contains at least three distinct policy mechanisms: constitution che
 2. Ensure no caller or execution path treats its caller-supplied `ok` response as an execution permit.
 3. Define a canonical governance decision contract that binds authenticated principal, authoritative tenant lifecycle, agent identity, issued constitution version/integrity, delegation, resource/action, budget, risk, approval evidence, and policy version.
 4. Select one authoritative enforcement point immediately before side effects; it must fail closed on missing, invalid, stale, revoked, cross-tenant, or unverifiable inputs and require an explicit `allowed` decision before execution.
-5. Add route and enforcement tests for forged constitution, cross-tenant access, revoked/expired/stale policy, approval evidence, budget boundaries, and interlock failure. The source-module unit-test gap is now addressed by PR #27; these trust-boundary tests remain open.
+5. Add route and enforcement tests for forged constitution, cross-tenant access, revoked/expired/stale policy, approval evidence, budget boundaries, and interlock failure. PR #28/#29 now add and CI-test a narrower route contract: advisory metadata for caller-supplied evaluation and HTTP 400 when the constitution is missing. Broader identity, tenant, lifecycle, approval, and execution-binding tests remain open.
 6. Keep implementation changes separate and validate with simulated tests before any deployment review.
 
 ## Disposition
@@ -95,9 +95,9 @@ The runtime contains at least three distinct policy mechanisms: constitution che
 - Check endpoint loads stored constitution before evaluation: **NOT OBSERVED**.
 - Constitution check is wired into inspected agent execution gates: **NOT OBSERVED**.
 - Direct tests of the real constitution source module: **IMPLEMENTED AND CI-TESTED** (PR #27).
-- Route trust-boundary and real execution integration tests: **NOT IMPLEMENTED**.
+- Route advisory contract tests: **IMPLEMENTED AND CI-TESTED** (PR #28; test harness correction PR #29). They assert non-authoritative metadata/warning and rejection of a missing constitution; they do not prove issuer authentication, tenant binding, lifecycle checks, or execution authorization.\n- Broader adversarial route/enforcement and real execution integration tests: **NOT IMPLEMENTED**.
 - SafetyInterlock is a separate execution gate in inspected paths: **CONFIRMED**.
 - Production exposure or exploitability: **NOT ESTABLISHED**.
-- Cloudflare/runtime validation: **NOT PERFORMED**.
+- GitHub Actions run `44195082214` and `44195082196` on PR #29: **PASSED**, including `test:safety`, `test:security`, TypeScript checks, shell syntax check, and Wrangler dry-runs for staging/production bundles.\n- Cloudflare deployment/live runtime validation: **NOT PERFORMED**.
 
 This document is audit-only. It changes no executable code, schemas, migrations, workflows, secrets, Cloudflare resources, or deployment configuration.
