@@ -11,7 +11,7 @@
  */
 
 import type { Env, Identity } from "../types";
-import { evaluatePolicy, type ProposedAction, type PolicyResult } from "../safety/policy";
+import { evaluatePolicy, redactActionForPersistence, type ProposedAction, type PolicyResult } from "../safety/policy";
 import { emitLineage } from "../lineage";
 import { hashAuditRecord, verifyAuditChain } from "../security/audit-chain";
 import { sha256Hex, writeImmutableCheckpoint, verifyExternalOtsAnchor } from "../security/audit-anchor";
