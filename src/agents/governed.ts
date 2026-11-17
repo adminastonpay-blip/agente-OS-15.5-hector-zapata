@@ -1,6 +1,6 @@
 import type { Env, Identity } from "../types";
 import { emitLineage } from "../lineage";
-import { evaluateAccess } from "../access/access";
+import { evaluateAccess, isExplicitAccessAllow } from "../access/access";
 import {
   gateAgentExposure,
   loadEnvelope,
@@ -53,7 +53,7 @@ export async function createPlan(
     object_type: "agent_plan",
     purpose: "agent",
   });
-  if (access.effect !== "allow") throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
+  if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const agent_id = String(input.agent_id ?? "default-agent").slice(0, 64);
   const envelope =
@@ -217,7 +217,7 @@ export async function approvePlan(
     purpose: "agent",
     resource_id: planId,
   });
-  if (access.effect !== "allow") throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
+  if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const status = input.approve ? "approved" : "rejected";
   await env.DB.prepare(
@@ -253,7 +253,7 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     purpose: "agent",
     resource_id: planId,
   });
-  if (access.effect !== "allow") throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
+  if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const humanApproved = true; // status approved implies human (or auto-approved path)
 
@@ -345,11 +345,11 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
       resource_id: action.target_id ?? action.id,
     });
 
-    if (actionAccess.effect === "deny") {
+    if (!isExplicitAccessAllow(actionAccess.effect)) {
       await env.DB.prepare(
         `UPDATE agent_actions SET status = 'blocked', result = ?, executed_at = ? WHERE id = ?`
       )
-        .bind(`access_denied:${actionAccess.reason}`, Date.now(), action.id)
+        .bind(`access_not_allowed:${actionAccess.effect}:${actionAccess.reason}`, Date.now(), action.id)
         .run();
       failed = true;
       failureReason = `action_blocked:${action.id}`;
