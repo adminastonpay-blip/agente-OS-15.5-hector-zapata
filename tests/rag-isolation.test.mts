@@ -27,11 +27,17 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
   test("Tenant B must not retrieve Tenant A data; ingest and query must use tenant namespaces", async () => {
     const stored: any[] = [];
     const queryCalls: any[] = [];
+    const persistedRows: any[] = [];
     const env: any = {
       AI: aiMock(),
       DB: {
-        prepare: (_sql: string) => ({
-          bind: (..._args: unknown[]) => ({ run: async () => ({ success: true }) }),
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            run: async () => {
+              if (sql.includes("INSERT INTO documents")) persistedRows.push({ sql, args });
+              return { success: true };
+            },
+          }),
         }),
       },
       VECTORIZE: {
@@ -82,6 +88,9 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
     const violations: string[] = [];
     if (stored.some((item) => item.namespace !== "tenant-A" || "tenant" in (item.metadata ?? {}))) {
       violations.push("ingest did not persist tenant-A namespace or still stores tenant as metadata");
+    }
+    if (persistedRows.length === 0 || persistedRows.some((row) => !row.sql.includes("(id, tenant, source, chunk, created_at)") || row.args[1] !== "tenant-A")) {
+      violations.push("D1 document record was not persisted with the authenticated tenant");
     }
     if (queryCalls[0]?.namespace !== "tenant-B") {
       violations.push("query did not send Vectorize namespace=tenant-B");
