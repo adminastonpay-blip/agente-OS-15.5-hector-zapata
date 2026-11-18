@@ -8,6 +8,14 @@ import { emitLineage, getLineageTree } from "../lineage";
 import { maskForAgent } from "../pii";
 import { embed, chat, chunk } from "../lib/ai";
 
+// Vectorize namespaces are limited to 64 UTF-8 bytes. Derive only from
+// the authenticated identity; never accept a namespace from the request body.
+function tenantNamespace(identity: Identity): string | null {
+  const tenant = identity.tenant?.trim();
+  if (!tenant || new TextEncoder().encode(tenant).byteLength > 64) return null;
+  return tenant;
+}
+
 export function pillarStatus(env: Env) {
   return {
     ai: !!env.AI,
@@ -39,7 +47,8 @@ export async function handleV21(
     const text = String(body.text || body.content || "").trim();
     const source = String(body.source || "upload").slice(0, 200);
     if (!text) return json({ ok: false, error: "text required" }, 400);
-    if (!identity.tenant?.trim()) return json({ ok: false, error: "tenant identity required" }, 403);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     if (!env.AI) return json({ ok: false, error: "AI required" }, 503);
     if (!env.DB) return json({ ok: false, error: "D1 binding required for RAG persistence" }, 503);
     if (!env.VECTORIZE) return json({ ok: false, error: "Vectorize binding required for tenant-isolated RAG" }, 503);
@@ -66,7 +75,8 @@ export async function handleV21(
           {
             id,
             values: vec,
-            metadata: { source, chunk: part.slice(0, 500), tenant: identity.tenant },
+            namespace,
+            metadata: { source, chunk: part.slice(0, 500) },
           },
         ] as any);
       } catch (error: any) {
@@ -88,7 +98,8 @@ export async function handleV21(
     const body = await req.json<any>().catch(() => ({}));
     const q = String(body.query || body.q || "").trim();
     if (!q) return json({ ok: false, error: "query required" }, 400);
-    if (!identity.tenant?.trim()) return json({ ok: false, error: "tenant identity required" }, 403);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     if (!env.VECTORIZE) {
       return json({
         ok: true,
@@ -105,7 +116,7 @@ export async function handleV21(
       const m = await env.VECTORIZE.query(qvec, {
         topK,
         returnMetadata: "all",
-        filter: { tenant: { $eq: identity.tenant } },
+        namespace,
       } as any);
       return json({ ok: true, matches: m.matches ?? [] });
     } catch (e: any) {
@@ -303,7 +314,8 @@ export async function handleV21(
     const body = await req.json<any>().catch(() => ({}));
     const message = String(body.message || body.objective || "").trim();
     if (!message) return json({ ok: false, error: "message required" }, 400);
-    if (!identity.tenant?.trim()) return json({ ok: false, error: "tenant identity required" }, 403);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     if (!env.SAFETY) return json({ ok: false, error: "decision_safety_binding_unavailable" }, 503);
     try {
       const safetyStub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
@@ -329,7 +341,7 @@ export async function handleV21(
         const m = await env.VECTORIZE.query(qvec, {
           topK: 3,
           returnMetadata: "all",
-          filter: { tenant: { $eq: identity.tenant } },
+          namespace,
         } as any);
         context = (m.matches ?? [])
           .map((x: any) => x.metadata?.chunk)
