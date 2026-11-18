@@ -39,30 +39,39 @@ export async function handleV21(
     const text = String(body.text || body.content || "").trim();
     const source = String(body.source || "upload").slice(0, 200);
     if (!text) return json({ ok: false, error: "text required" }, 400);
+    if (!identity.tenant?.trim()) return json({ ok: false, error: "tenant identity required" }, 403);
     if (!env.AI) return json({ ok: false, error: "AI required" }, 503);
+    if (!env.DB) return json({ ok: false, error: "D1 binding required for RAG persistence" }, 503);
+    if (!env.VECTORIZE) return json({ ok: false, error: "Vectorize binding required for tenant-isolated RAG" }, 503);
 
     const parts = chunk(text);
     const ids: string[] = [];
     for (const part of parts) {
       const id = `doc_${crypto.randomUUID()}`;
       ids.push(id);
-      if (env.DB) {
+      try {
         await env.DB.prepare(
           `INSERT INTO documents (id, source, chunk, created_at) VALUES (?, ?, ?, ?)`
         )
           .bind(id, source, part, Date.now())
-          .run()
-          .catch(() => {});
+          .run();
+      } catch (error) {
+        console.error("[RAG_D1_PERSISTENCE_FAILED]", error);
+        return json({ ok: false, error: "Persistence failed" }, 500);
       }
-      if (env.VECTORIZE) {
-        try {
-          const [vec] = await embed(env, [part]);
-          await env.VECTORIZE.upsert([
-            { id, values: vec, metadata: { source, chunk: part.slice(0, 500) } },
-          ] as any);
-        } catch (e: any) {
-          console.warn("[RAG_UPSERT]", e?.message);
-        }
+
+      try {
+        const [vec] = await embed(env, [part]);
+        await env.VECTORIZE.upsert([
+          {
+            id,
+            values: vec,
+            metadata: { source, chunk: part.slice(0, 500), tenant: identity.tenant },
+          },
+        ] as any);
+      } catch (error: any) {
+        console.error("[RAG_VECTORIZE_UPSERT_FAILED]", error?.message || error);
+        return json({ ok: false, error: "Vector persistence failed" }, 502);
       }
       await emitLineage(env, {
         object_id: id,
@@ -79,6 +88,7 @@ export async function handleV21(
     const body = await req.json<any>().catch(() => ({}));
     const q = String(body.query || body.q || "").trim();
     if (!q) return json({ ok: false, error: "query required" }, 400);
+    if (!identity.tenant?.trim()) return json({ ok: false, error: "tenant identity required" }, 403);
     if (!env.VECTORIZE) {
       return json({
         ok: true,
@@ -88,7 +98,15 @@ export async function handleV21(
     }
     try {
       const [qvec] = await embed(env, [q]);
-      const m = await env.VECTORIZE.query(qvec, { topK: body.topK ?? 5, returnMetadata: "all" } as any);
+      const requestedTopK = Number(body.topK ?? 5);
+      const topK = Number.isFinite(requestedTopK)
+        ? Math.min(20, Math.max(1, Math.floor(requestedTopK)))
+        : 5;
+      const m = await env.VECTORIZE.query(qvec, {
+        topK,
+        returnMetadata: "all",
+        filter: { tenant: { $eq: identity.tenant } },
+      } as any);
       return json({ ok: true, matches: m.matches ?? [] });
     } catch (e: any) {
       return json({ ok: false, error: String(e?.message || e).slice(0, 200) }, 502);
@@ -285,6 +303,7 @@ export async function handleV21(
     const body = await req.json<any>().catch(() => ({}));
     const message = String(body.message || body.objective || "").trim();
     if (!message) return json({ ok: false, error: "message required" }, 400);
+    if (!identity.tenant?.trim()) return json({ ok: false, error: "tenant identity required" }, 403);
     if (!env.SAFETY) return json({ ok: false, error: "decision_safety_binding_unavailable" }, 503);
     try {
       const safetyStub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
@@ -307,7 +326,11 @@ export async function handleV21(
     if (env.VECTORIZE && env.AI) {
       try {
         const [qvec] = await embed(env, [message]);
-        const m = await env.VECTORIZE.query(qvec, { topK: 3, returnMetadata: "all" } as any);
+        const m = await env.VECTORIZE.query(qvec, {
+          topK: 3,
+          returnMetadata: "all",
+          filter: { tenant: { $eq: identity.tenant } },
+        } as any);
         context = (m.matches ?? [])
           .map((x: any) => x.metadata?.chunk)
           .filter(Boolean)
