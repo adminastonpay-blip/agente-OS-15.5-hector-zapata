@@ -62,6 +62,8 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
       json
     );
     assert.ok(ingest);
+    const ingestPayload = await ingest.json() as any;
+    const tenantADocumentIds = new Set<string>(ingestPayload.ids ?? []);
 
     const query = await handleV21(
       "/v1/rag/query",
@@ -84,8 +86,8 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
     if (queryCalls[0]?.filter?.tenantId?.$eq !== "tenant-B") {
       violations.push("query did not send Vectorize filter tenantId=$eq tenant-B");
     }
-    if ((payload.matches ?? []).some((match: any) => match.metadata?.tenantId === "tenant-A")) {
-      violations.push("Tenant B received a Tenant A document");
+    if ((payload.matches ?? []).some((match: any) => tenantADocumentIds.has(match.id))) {
+      violations.push("Tenant B received a document ID created by Tenant A");
     }
     assert.deepEqual(violations, [], violations.join("; "));
   });
