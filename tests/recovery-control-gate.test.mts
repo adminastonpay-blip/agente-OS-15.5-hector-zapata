@@ -34,6 +34,9 @@ function makeEnv(options: { safety?: string; rate?: number } = {}) {
         if (url.endsWith("/rate-limit/check")) {
           calls.rate++;
           calls.rateAction = _id;
+          const policy = JSON.parse(String(init?.body));
+          assert.equal(policy.limit, 5);
+          assert.equal(policy.window_ms, 60_000);
           return Response.json({ allowed: options.rate !== 429 }, { status: options.rate ?? 200 });
         }
         return new Response("not found", { status: 404 });
@@ -91,6 +94,10 @@ test("5. permiso Recovery autoriza una sola inferencia con payload exacto", asyn
   const runner = new ModelRunner(env);
   const output = await runner.runInference(result.permit, "recovery_diagnosis", content);
   assert.match(output.response, /diagnosis/);
+  await assert.rejects(
+    runner.runInference(result.permit, "recovery_diagnosis", content + " altered"),
+    /invalid_or_replayed_inference_permit/
+  );
   await assert.rejects(
     runner.runInference(result.permit, "recovery_diagnosis", content),
     /invalid_or_replayed_inference_permit/
