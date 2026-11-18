@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { MissionTokenVerifier, type MissionTokenPayload } from "../src/core/mission-token.ts";
+import { MissionTokenVerifier, hashRecoveryMission, type MissionTokenPayload } from "../src/core/mission-token.ts";
 import { ControlGate } from "../src/core/control-gate.ts";
 import { ReplayGuard } from "../src/core/replay-guard.ts";
 
@@ -16,6 +16,13 @@ async function fixture(overrides: Partial<MissionTokenPayload> = {}) {
   const pair = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const rawPublic = new Uint8Array(await webcrypto.subtle.exportKey("raw", pair.publicKey));
   const now = Math.floor(Date.now() / 1000);
+  const missionHash = await hashRecoveryMission({
+    missionId: "mission-2026-0001",
+    origin: "https://api.example.test/health",
+    poolId: "pool-42",
+    errorCode: 503,
+    severity: "high",
+  });
   const payload: MissionTokenPayload = {
     iss: "aston-os-gateway",
     aud: "recovery-workflow",
@@ -26,6 +33,7 @@ async function fixture(overrides: Partial<MissionTokenPayload> = {}) {
     iat: now,
     exp: now + 600,
     missionId: "mission-2026-0001",
+    missionHash,
     ...overrides,
   };
   const header = encode({ alg: "EdDSA", typ: "JWT" });
@@ -144,4 +152,24 @@ test("8. Durable Object rejects expired or overlong replay claims", async () => 
     }),
   }));
   assert.equal(response.status, 400);
+});
+
+test("9. mission digest binds origin, pool, error code and severity", async () => {
+  const original = {
+    missionId: "mission-2026-0001",
+    origin: "https://api.example.test/health",
+    poolId: "pool-42",
+    errorCode: 503,
+    severity: "high" as const,
+  };
+  const digest = await hashRecoveryMission(original);
+  assert.equal(digest.length, 64);
+  assert.notEqual(
+    digest,
+    await hashRecoveryMission({ ...original, origin: "https://other.example.test/health" })
+  );
+  assert.notEqual(
+    digest,
+    await hashRecoveryMission({ ...original, errorCode: 401 })
+  );
 });
