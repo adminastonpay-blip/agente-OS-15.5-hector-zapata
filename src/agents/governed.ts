@@ -27,6 +27,17 @@ export function isVerifiedHumanApprover(identity: Identity): boolean {
   return identity.method === "access" && identity.roles.includes("agent_approver");
 }
 
+/** Unassigned identities must not enter governed plan lifecycle operations. */
+export function hasAssignedTenant(identity: Identity): boolean {
+  return typeof identity.tenant === "string" &&
+    /^[a-zA-Z0-9_-]{1,64}$/.test(identity.tenant) &&
+    !identity.tenant.startsWith("unassigned-");
+}
+
+function requireAssignedTenant(identity: Identity): void {
+  if (!hasAssignedTenant(identity)) throw new Error("tenant_assignment_required");
+}
+
 export type GovernedAction = {
   action: string;
   object_type: string;
@@ -48,6 +59,7 @@ export async function createPlan(
     max_exposure?: number;
   }
 ) {
+  requireAssignedTenant(id);
   if (!env.DB) throw new Error("DB binding required");
   if (!input?.goal || !Array.isArray(input.steps) || !input.steps.length) {
     throw new Error("goal y steps son requeridos");
@@ -250,6 +262,7 @@ export async function approvePlan(
   planId: string,
   input: { approve: boolean; reason?: string }
 ) {
+  requireAssignedTenant(id);
   if (!env.DB) throw new Error("DB binding required");
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
@@ -308,6 +321,7 @@ export async function approvePlan(
 }
 
 export async function executePlan(env: Env, id: Identity, planId: string) {
+  requireAssignedTenant(id);
   if (!env.DB) throw new Error("DB binding required");
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
