@@ -336,33 +336,39 @@ export default {
       if (!isAllowedRecoveryOrigin(body.origin, env.RECOVERY_ALLOWED_ORIGINS)) {
         return json({ ok: false, error: "recovery_origin_not_allowlisted" }, 403);
       }
+      let claims;
       try {
         const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(
           env.MISSION_TOKEN_PUBLIC_KEY
         );
-        const claims = await verifier.verify(body.mission_token);
-        // Bind the signed delegation to the independently authenticated API caller.
-        if (claims.sub !== identity.actor || claims.tenantId !== identity.tenant ||
-            claims.action !== "recovery_diagnosis") {
-          return json({ ok: false, error: "mission_token_identity_mismatch" }, 403);
-        }
-        const mission = {
-          id: claims.missionId,
-          origin: body.origin,
-          pool_id: body.pool_id.slice(0, 128),
-          error_code: body.error_code,
-          severity: body.severity,
-          created_at: Date.now(),
-          created_by: identity.actor,
-          mission_token: body.mission_token,
-        };
+        claims = await verifier.verify(body.mission_token);
+      } catch {
+        return json({ ok: false, error: "mission_token_invalid" }, 403);
+      }
+      // Bind the signed delegation to the independently authenticated API caller.
+      if (claims.sub !== identity.actor || claims.tenantId !== identity.tenant ||
+          claims.action !== "recovery_diagnosis") {
+        return json({ ok: false, error: "mission_token_identity_mismatch" }, 403);
+      }
+      const mission = {
+        id: claims.missionId,
+        origin: body.origin,
+        pool_id: body.pool_id.slice(0, 128),
+        error_code: body.error_code,
+        severity: body.severity,
+        created_at: Date.now(),
+        created_by: identity.actor,
+        mission_token: body.mission_token,
+      };
+      try {
         const instance = await env.RECOVERY_WORKFLOW.create({
           id: crypto.randomUUID(),
           params: mission,
         });
         return json({ ok: true, workflow_id: instance.id, status: "accepted" }, 202);
       } catch {
-        return json({ ok: false, error: "recovery_authorization_or_start_failed" }, 403);
+        return json({ ok: false, error: "recovery_workflow_start_failed" }, 503);
+      }
       }
     }
 
