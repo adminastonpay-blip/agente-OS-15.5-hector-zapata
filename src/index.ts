@@ -369,7 +369,6 @@ export default {
       } catch {
         return json({ ok: false, error: "recovery_workflow_start_failed" }, 503);
       }
-      }
     }
 
     if (path === "/v1/audit/anchor/verify" && req.method === "POST") {
