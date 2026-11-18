@@ -13,6 +13,10 @@ export interface Env {
   SAFETY?: DurableObjectNamespace;
   /** Tenant-partitioned, SQLite-backed single-use mission token claims. */
   REPLAY_GUARD?: DurableObjectNamespace;
+  /** Cloudflare Workflow binding used only by the authenticated Recovery entrypoint. */
+  RECOVERY_WORKFLOW?: {
+    create(options: { id?: string; params: MissionParams }): Promise<{ id: string }>;
+  };
 
   // Optional platform resources
   DB?: D1Database;
