@@ -22,6 +22,11 @@ async function appendAgentAudit(env: Env, identity: Identity, eventType: string,
   if (!response.ok && env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_append_failed:" + response.status);
 }
 
+/** Only a signed Cloudflare Access identity carrying the dedicated role may approve plans. */
+export function isVerifiedHumanApprover(identity: Identity): boolean {
+  return identity.method === "access" && identity.roles.includes("agent_approver");
+}
+
 export type GovernedAction = {
   action: string;
   object_type: string;
@@ -248,7 +253,7 @@ export async function approvePlan(
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
   if (plan.status !== "pending_approval") throw new Error(`plan_not_pending_approval:${plan.status}`);
-  if (input.approve && (id.method !== "access" || !id.roles.includes("agent_approver"))) {
+  if (input.approve && !isVerifiedHumanApprover(id)) {
     throw new Error("verified_human_approver_role_required");
   }
 
