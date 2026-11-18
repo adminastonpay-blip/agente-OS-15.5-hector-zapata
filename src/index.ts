@@ -8,6 +8,7 @@ import { AgentNode } from "./do/agent-node";
 import { SimulationTwin } from "./do/simulation";
 import { MissionBrain } from "./do/mission-brain";
 import { SafetyInterlock } from "./do/safety-interlock";
+import { ReplayGuard } from "./core/replay-guard";
 import {
   VOICE_PROFILES,
   TTS_MODELS,
@@ -42,6 +43,7 @@ export {
   SimulationTwin,
   MissionBrain,
   SafetyInterlock,
+  ReplayGuard,
 };
 
 const VERSION = "21.6.3-cf-audit";
