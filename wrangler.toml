@@ -51,6 +51,10 @@ class_name = "MissionBrain"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
+[[durable_objects.bindings]]
+name = "REPLAY_GUARD"
+class_name = "ReplayGuard"
+
 # —— Declarative DO class lifecycle (replaces [[migrations]]) ——
 [exports.SessionMemory]
 type = "durable-object"
@@ -77,6 +81,10 @@ type = "durable-object"
 storage = "sqlite"
 
 [exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.ReplayGuard]
 type = "durable-object"
 storage = "sqlite"
 
