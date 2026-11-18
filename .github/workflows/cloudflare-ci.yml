@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/ai-control-gate
+      - feat/rag-tenant-isolation
   pull_request:
     branches:
       - main
@@ -54,6 +55,9 @@ jobs:
 
       - name: Recovery end-to-end security chain
         run: npm run test:recovery-e2e
+
+      - name: RAG tenant isolation red-team tests
+        run: npm run test:rag-isolation
 
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
