@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from "cloudflare:workers";
 import type { Env, MissionParams } from "../types";
 import { maskForAgent } from "../pii";
-import { isAllowedRecoveryOrigin } from "../security/recovery-guard";
+import { probeRecoveryOrigin } from "../security/recovery-guard";
 import { MissionTokenVerifier } from "../core/mission-token";
 import { ControlGate } from "../core/control-gate";
 import { ModelRunner } from "../core/model-runner";
@@ -33,37 +33,13 @@ export class RecoveryWorkflow extends WorkflowEntrypoint<Env, MissionParams> {
       return claims;
     });
 
-    const originAllowed = isAllowedRecoveryOrigin(m.origin, this.env.RECOVERY_ALLOWED_ORIGINS);
     const diag = await (step.do as any)("edge-diagnose", {
       retries: { limit: 2, delay: "5 seconds", backoff: "exponential" },
       timeout: "15 seconds",
-    }, async () => {
-      const t0 = Date.now();
-      if (!originAllowed) {
-        return {
-          reachable: false,
-          status: 0,
-          latency_ms: 0,
-          blocked: "origin_not_allowlisted",
-        };
-      }
-      try {
-        // Never follow redirects: a 3xx response is a terminal probe result.
-        const response = await fetch(m.origin, {
-          method: "HEAD",
-          redirect: "error",
-          signal: AbortSignal.timeout(3000),
-        });
-        return { reachable: response.ok, status: response.status, latency_ms: Date.now() - t0 };
-      } catch {
-        return {
-          reachable: false,
-          status: 0,
-          latency_ms: Date.now() - t0,
-          blocked: "probe_failed_or_redirect_blocked",
-        };
-      }
-    }) as {
+    }, async () => probeRecoveryOrigin(
+      m.origin,
+      this.env.RECOVERY_ALLOWED_ORIGINS
+    )) as {
       reachable: boolean;
       status: number;
       latency_ms: number;
