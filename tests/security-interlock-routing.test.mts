@@ -8,14 +8,15 @@ const supervisor = await readFile(new URL("../src/do/supervisor.ts", import.meta
 const agent = await readFile(new URL("../src/do/agent-node.ts", import.meta.url), "utf8");
 const simulation = await readFile(new URL("../src/do/simulation.ts", import.meta.url), "utf8");
 
-test("chat safety gate cannot be disabled by deployment flags", () => {
-  const start = source.indexOf("async function enforceChatSafety(");
-  const end = source.indexOf("async function handleChat(", start);
-  assert.ok(start >= 0 && end > start, "chat safety function must exist");
-  const gate = source.slice(start, end);
-  assert.doesNotMatch(gate, /CHAT_SAFETY_ENFORCED|DEPLOY_PROFILE/);
-  assert.match(gate, /if \(!env\.SAFETY\)/);
-  assert.match(gate, /chat_safety_unavailable/);
+test("chat route uses the Control Gate and one-use Model Runner permit", () => {
+  const start = source.indexOf("async function handleChat(");
+  const end = source.indexOf("async function handleChatStream(", start);
+  assert.ok(start >= 0 && end > start, "chat handler must exist");
+  const handler = source.slice(start, end);
+  assert.match(handler, /new ControlGate\(env\)\.authorizeChat\(identity, messages\)/);
+  assert.match(handler, /new ModelRunner\(env\)\.runChat\(authorization\.permit, messages/);
+  assert.match(handler, /if \(!authorization\.ok\)/);
+  assert.doesNotMatch(handler, /\bchat\(env,\s*messages/);
 });
 
 test("streaming remains fail-closed until buffered output inspection exists", () => {
