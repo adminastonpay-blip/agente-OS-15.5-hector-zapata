@@ -9,7 +9,7 @@ import { SimulationTwin } from "./do/simulation";
 import { MissionBrain } from "./do/mission-brain";
 import { SafetyInterlock } from "./do/safety-interlock";
 import { RecoveryWorkflow } from "./workflows/recovery";
-import { MissionTokenVerifier } from "./core/mission-token";
+import { MissionTokenVerifier, hashRecoveryMission } from "./core/mission-token";
 import { isAllowedRecoveryOrigin } from "./security/recovery-guard";
 import { ReplayGuard } from "./core/replay-guard";
 import {
@@ -329,6 +329,7 @@ export default {
       const body = await req.json<any>().catch(() => null);
       if (!body || typeof body.mission_token !== "string" ||
           typeof body.origin !== "string" || typeof body.pool_id !== "string" ||
+          !body.pool_id.trim() || body.pool_id.length > 128 ||
           !Number.isSafeInteger(body.error_code) ||
           !["low", "medium", "high", "critical"].includes(body.severity)) {
         return json({ ok: false, error: "invalid_recovery_request" }, 400);
@@ -350,10 +351,21 @@ export default {
           claims.action !== "recovery_diagnosis") {
         return json({ ok: false, error: "mission_token_identity_mismatch" }, 403);
       }
+      const poolId = body.pool_id.slice(0, 128);
+      const missionHash = await hashRecoveryMission({
+        missionId: claims.missionId,
+        origin: body.origin,
+        poolId,
+        errorCode: body.error_code,
+        severity: body.severity,
+      });
+      if (missionHash !== claims.missionHash) {
+        return json({ ok: false, error: "mission_token_payload_mismatch" }, 403);
+      }
       const mission = {
         id: claims.missionId,
         origin: body.origin,
-        pool_id: body.pool_id.slice(0, 128),
+        pool_id: poolId,
         error_code: body.error_code,
         severity: body.severity,
         created_at: Date.now(),
