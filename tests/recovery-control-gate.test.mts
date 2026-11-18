@@ -14,6 +14,7 @@ const payload: MissionTokenPayload = {
   iat: Math.floor(Date.now() / 1000),
   exp: Math.floor(Date.now() / 1000) + 600,
   missionId: "mission-2026-0001",
+  missionHash: "a".repeat(64),
 };
 const content = JSON.stringify({ mission: payload.missionId, origin: "https://api.example.test" });
 
