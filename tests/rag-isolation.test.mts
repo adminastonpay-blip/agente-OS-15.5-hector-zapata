@@ -1,6 +1,7 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { handleV21 } from "../src/routes/v21.ts";
+import { enforceRequestBodyLimit } from "../src/security/request-guard.ts";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -169,5 +170,5 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
       "El guard permitió pasar un payload de 5 MiB al endpoint de ingesta"
     );
     assert.equal(bounded.result.limit, 64 * 1024);
-  });;
+  });
 });
