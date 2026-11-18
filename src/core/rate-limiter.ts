@@ -28,7 +28,9 @@ export class RateLimiter {
       });
       if (response.status === 429) return { allowed: false };
       if (!response.ok) return { allowed: false, unavailable: true };
-      const result = await response.json<{ allowed?: boolean }>().catch(() => ({}));
+      const result = await response
+        .json<{ allowed?: boolean }>()
+        .catch((): { allowed?: boolean } => ({}));
       return result.allowed === true
         ? { allowed: true }
         : { allowed: false, unavailable: true };
