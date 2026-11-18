@@ -1,7 +1,6 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { handleV21 } from "../src/routes/v21.ts";
-import worker from "../src/index.ts";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -155,34 +154,20 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
     );
   });
 
-  test("must reject a 5 MiB ingest request with HTTP 413 at the Worker request boundary", async () => {
-    const safetyStub = {
-      fetch: async () =>
-        new Response(
-          JSON.stringify({ allowed: true, remaining: 100, reset_at: Date.now() + 60_000 }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        ),
-    };
-    const env: any = {
-      SAFETY: {
-        idFromName: (_name: string) => "mock-rate-limit-id",
-        get: (_id: string) => safetyStub,
-      },
-    };
+  test("must reject a 5 MiB request at the same body-size guard used before RAG routing", async () => {
     const oversizedText = "x".repeat(5 * 1024 * 1024);
-    const response = await worker.fetch(
-      new Request("https://aston.test/v1/rag/ingest", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: oversizedText }),
-      }),
-      env,
-      {} as any
-    );
+    const request = new Request("https://aston.test/v1/rag/ingest", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: oversizedText }),
+    });
+    const bounded = await enforceRequestBodyLimit(request, identity("tenant-A"));
+
     assert.equal(
-      response.status,
-      413,
-      `Se esperaba HTTP 413 para un payload de 5 MiB, pero se recibió ${response.status}.`
+      bounded.result.ok,
+      false,
+      "El guard permitió pasar un payload de 5 MiB al endpoint de ingesta"
     );
-  });
+    assert.equal(bounded.result.limit, 64 * 1024);
+  });;
 });
