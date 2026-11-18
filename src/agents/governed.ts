@@ -266,24 +266,29 @@ export async function approvePlan(
   if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const status = input.approve ? "approved" : "rejected";
+  let approvalId: string | null = null;
   if (input.approve) {
     const actions = await loadProposedActions(env, id.tenant, planId);
     const planDigest = await digestPlan(plan, actions);
     const now = Date.now();
+    approvalId = `appr_${crypto.randomUUID()}`;
     await env.DB.prepare(
       `INSERT INTO agent_plan_approvals
          (id, tenant, plan_id, plan_digest, approver_actor, auth_method, access_decision_id, reason, created_at, expires_at)
        VALUES (?, ?, ?, ?, ?, 'access', ?, ?, ?, ?)`
     ).bind(
-      `appr_${crypto.randomUUID()}`, id.tenant, planId, planDigest, id.actor,
+      approvalId, id.tenant, planId, planDigest, id.actor,
       access.decision_id, (input.reason ?? "").slice(0, 500), now, now + APPROVAL_TTL_MS
     ).run();
   }
-  await env.DB.prepare(
+  const statusUpdate = await env.DB.prepare(
     `UPDATE agent_plans SET status = ?, updated_at = ? WHERE tenant = ? AND id = ? AND status = 'pending_approval'`
   )
     .bind(status, Date.now(), id.tenant, planId)
     .run();
+  if ((statusUpdate.meta?.changes ?? 0) !== 1) {
+    throw new Error("plan_approval_state_changed_concurrently");
+  }
 
   await appendAgentAudit(env, id, input.approve ? "agent.plan.approved" : "agent.plan.rejected_by_human", {
     plan_id: planId, decision: status, reason: (input.reason ?? "").slice(0, 160),
