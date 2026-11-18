@@ -46,7 +46,7 @@ function encodeBase64Url(bytes: Uint8Array): string {
 
 function parseJson<T>(bytes: Uint8Array): T {
   try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)) as T;
   } catch {
     throw new Error("mission_token_malformed");
   }
