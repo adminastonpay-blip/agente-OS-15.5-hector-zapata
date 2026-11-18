@@ -113,7 +113,7 @@ export class ControlGate {
         };
       }
 
-      const rate = await new RateLimiter(this.env).check(payload.tenantId, "recovery_diagnosis");
+      const rate = await new RateLimiter(this.env).check(payload.tenantId, "recovery_diagnosis", 5, 60_000);
       if (!rate.allowed) {
         return {
           ok: false,
