@@ -43,6 +43,9 @@ jobs:
       - name: AI Control Gate red-team tests
         run: npm run test:control-gate
 
+      - name: Mission Token and anti-replay red-team tests
+        run: npm run test:mission-token
+
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
 
