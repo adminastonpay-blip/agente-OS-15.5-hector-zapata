@@ -41,9 +41,9 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
         },
         query: async (_vector: number[], options: any) => {
           queryCalls.push(options);
-          const tenantFilter = options?.filter?.tenantId?.$eq;
+          const tenantFilter = options?.filter?.tenant?.$eq;
           const matches = stored
-            .filter((item) => !tenantFilter || item.metadata?.tenantId === tenantFilter)
+            .filter((item) => !tenantFilter || item.metadata?.tenant === tenantFilter)
             .map((item) => ({ id: item.id, metadata: item.metadata }));
           return { matches };
         },
@@ -80,11 +80,11 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
     const payload = await query.json() as any;
 
     const violations: string[] = [];
-    if (stored.some((item) => item.metadata?.tenantId !== "tenant-A")) {
-      violations.push("ingest did not persist tenantId=tenant-A metadata");
+    if (stored.some((item) => item.metadata?.tenant !== "tenant-A")) {
+      violations.push("ingest did not persist tenant=tenant-A metadata");
     }
-    if (queryCalls[0]?.filter?.tenantId?.$eq !== "tenant-B") {
-      violations.push("query did not send Vectorize filter tenantId=$eq tenant-B");
+    if (queryCalls[0]?.filter?.tenant?.$eq !== "tenant-B") {
+      violations.push("query did not send Vectorize filter tenant=$eq tenant-B");
     }
     if ((payload.matches ?? []).some((match: any) => tenantADocumentIds.has(match.id))) {
       violations.push("Tenant B received a document ID created by Tenant A");
@@ -172,5 +172,45 @@ describe("RAG tenant isolation and request security — TDD Red Phase", () => {
       "El guard permitió pasar un payload de 5 MiB al endpoint de ingesta"
     );
     assert.equal(bounded.result.limit, 64 * 1024);
+  });
+
+  test("Tenant B /v1/decide must query Vectorize with a mandatory tenant filter", async () => {
+    const queryCalls: any[] = [];
+    const safetyStub = {
+      fetch: async () => json({ status: "allowed" }, 200),
+    };
+    const env: any = {
+      AI: aiMock(),
+      SAFETY: {
+        idFromName: (_name: string) => "tenant-B-safety",
+        get: (_id: string) => safetyStub,
+      },
+      VECTORIZE: {
+        query: async (_vector: number[], options: any) => {
+          queryCalls.push(options);
+          return { matches: [] };
+        },
+      },
+    };
+
+    const response = await handleV21(
+      "/v1/decide",
+      new Request("https://aston.test/v1/decide", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "¿Qué decisión corresponde?" }),
+      }),
+      env,
+      identity("tenant-B"),
+      json
+    );
+
+    assert.ok(response);
+    assert.equal(queryCalls.length, 1, "La ruta /v1/decide no llegó a consultar Vectorize");
+    assert.deepEqual(
+      queryCalls[0]?.filter,
+      { tenant: { $eq: "tenant-B" } },
+      "La ruta /v1/decide consultó Vectorize sin el filtro obligatorio del tenant"
+    );
   });
 });
