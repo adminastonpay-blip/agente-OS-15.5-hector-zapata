@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { TokenIssuer, type Ed25519MissionSigner } from "../src/core/token-issuer.ts";
+import { TokenIssuer } from "../src/core/token-issuer.ts";
+import type { SignatureProvider } from "../src/core/signature-adapter.ts";
 import { MissionTokenVerifier } from "../src/core/mission-token.ts";
 import type { Identity } from "../src/types.ts";
 
@@ -19,7 +20,7 @@ const fixedJti = "9f1c4d20-6b8a-4a31-9d20-0a2f5e6c7b81";
 
 async function setup(now = 1_800_000_000) {
   const pair = await pairPromise;
-  const signer: Ed25519MissionSigner = {
+  const signer: SignatureProvider = {
     sign: async (data) => new Uint8Array(await webcrypto.subtle.sign(
       { name: "Ed25519" }, pair.privateKey, data
     )),
