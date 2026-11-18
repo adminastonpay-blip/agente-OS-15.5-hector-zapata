@@ -67,5 +67,7 @@ export interface Mission {
   created_by: string;
 }
 
-/** Payload for RecoveryWorkflow (optional Cloudflare Workflows). */
-export type MissionParams = Mission;
+/** Recovery payload carries a signed, narrowly scoped mission token. */
+export interface MissionParams extends Mission {
+  mission_token: string;
+}
