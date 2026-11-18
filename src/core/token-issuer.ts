@@ -1,5 +1,6 @@
 import type { Identity } from "../types";
-import { hashRecoveryMission, type MissionTokenPayload } from "./mission-token.ts";
+import { hashRecoveryMission, type MissionTokenPayload } from "./mission-token";
+import type { SignatureProvider } from "./signature-adapter";
 
 export interface RecoveryMissionContext {
   missionId: string;
@@ -8,14 +9,6 @@ export interface RecoveryMissionContext {
   poolId: string;
   errorCode: number;
   severity: "low" | "medium" | "high" | "critical";
-}
-
-/**
- * Signing boundary for a protected Ed25519 key service (KMS/HSM adapter).
- * Implementations must never export or log private key material.
- */
-export interface Ed25519MissionSigner {
-  sign(data: Uint8Array): Promise<Uint8Array>;
 }
 
 export interface TokenIssuerOptions {
@@ -73,7 +66,7 @@ export class TokenIssuer {
   private readonly allowedOrigins: Set<string>;
 
   constructor(
-    private readonly signer: Ed25519MissionSigner,
+    private readonly signer: SignatureProvider,
     options: TokenIssuerOptions = {},
   ) {
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));
