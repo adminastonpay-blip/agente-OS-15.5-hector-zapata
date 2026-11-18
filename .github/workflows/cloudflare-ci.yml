@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/ai-control-gate
   pull_request:
     branches:
       - main
