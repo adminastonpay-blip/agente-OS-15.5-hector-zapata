@@ -60,7 +60,7 @@ export class RecoveryWorkflow extends WorkflowEntrypoint<Env, MissionParams> {
         error_code: m.error_code,
         response_schema: { text: "string", confidence: "number", action: "none" },
       });
-      const { masked } = await maskForAgent(prompt, "internal", this.env.PII_HMAC_SECRET);
+      const { masked } = await maskForAgent(prompt, "public", this.env.PII_HMAC_SECRET);
       const gate = await new ControlGate(this.env).authorizeAction(missionClaims, masked);
       if (!gate.ok) throw new Error(gate.reason);
       const result = await new ModelRunner(this.env).runInference(
