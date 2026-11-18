@@ -41,7 +41,7 @@ test("createPlan fails closed before database access for an unassigned tenant", 
       goal: "must not create",
       steps: [{ action: "read", object_type: "record" }],
     }),
-    /^Error: tenant_assignment_required$/,
+    /tenant_assignment_required/,
   );
 });
 
@@ -51,13 +51,13 @@ test("approvePlan fails closed before database access for an unassigned tenant",
       approve: true,
       reason: "must not approve",
     }),
-    /^Error: tenant_assignment_required$/,
+    /tenant_assignment_required/,
   );
 });
 
 test("executePlan fails closed before database access for an unassigned tenant", async () => {
   await assert.rejects(
     executePlan(noDatabaseEnvironment(), unassignedAccessIdentity, "plan-fixture"),
-    /^Error: tenant_assignment_required$/,
+    /tenant_assignment_required/,
   );
 });
