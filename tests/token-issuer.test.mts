@@ -18,7 +18,7 @@ const mission = {
 };
 const fixedJti = "9f1c4d20-6b8a-4a31-9d20-0a2f5e6c7b81";
 
-async function setup(now = 1_800_000_000) {
+async function setup(now = Math.floor(Date.now() / 1000)) {
   const pair = await pairPromise;
   const signer: SignatureProvider = {
     sign: async (data) => new Uint8Array(await webcrypto.subtle.sign(
