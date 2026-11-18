@@ -46,6 +46,9 @@ jobs:
       - name: Mission Token and anti-replay red-team tests
         run: npm run test:mission-token
 
+      - name: Recovery Token Issuer red-team tests
+        run: npm run test:token-issuer
+
       - name: Recovery action gate red-team tests
         run: npm run test:recovery-gate
 
