@@ -68,7 +68,9 @@ export class ControlGate {
         }),
       });
 
-      const decision = await evaluation.json<{ status?: string; policy?: unknown }>().catch(() => ({}));
+      const decision = await evaluation
+        .json<{ status?: string; policy?: unknown }>()
+        .catch((): { status?: string; policy?: unknown } => ({}));
       if (!evaluation.ok || decision.status !== "allowed") {
         return {
           ok: false,
