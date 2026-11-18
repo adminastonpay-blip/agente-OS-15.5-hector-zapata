@@ -93,3 +93,9 @@ AI_GATEWAY_ID = "sovereign-gateway"
 CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 EMBED_MODEL = "@cf/baai/bge-m3"
 DEPLOY_PROFILE = "21.6.3-cf-audit"
+
+# Cloudflare Workflow registration (separate from Durable Object lifecycle).
+[[workflows]]
+name = "aston-recovery-workflow"
+binding = "RECOVERY_WORKFLOW"
+class_name = "RecoveryWorkflow"
