@@ -19,7 +19,7 @@ const identity = (tenant: string) => ({
 
 function aiMock() {
   return {
-    run: async () => ({ data: [[0.11, 0.22, 0.33]] }),
+    run: async () => ({ data: [[0.11, 0.22, 0.33]], response: "mock decision response" }),
   };
 }
 
