@@ -173,6 +173,43 @@ async function getPlan(env: Env, tenant: string, planId: string) {
     .first<any>();
 }
 
+const APPROVAL_TTL_MS = 15 * 60 * 1000;
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+}
+
+async function digestPlan(plan: any, actions: any[]): Promise<string> {
+  const snapshot = {
+    id: plan.id,
+    tenant: plan.tenant,
+    agent_id: plan.agent_id,
+    goal: plan.goal,
+    budget_calls: plan.budget_calls,
+    budget_cost: plan.budget_cost,
+    actions: actions.map((action) => ({
+      id: action.id,
+      action: action.action,
+      object_type: action.object_type,
+      target_id: action.target_id ?? null,
+      payload: action.payload ?? null,
+      estimated_cost: action.estimated_cost,
+    })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+  };
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stableJson(snapshot)));
+  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function loadProposedActions(env: Env, tenant: string, planId: string): Promise<any[]> {
+  const rows = await env.DB!.prepare(
+    `SELECT * FROM agent_actions WHERE tenant = ? AND plan_id = ? AND status = 'proposed' ORDER BY created_at, id`
+  ).bind(tenant, planId).all();
+  return (rows.results ?? []) as any[];
+}
+
 export async function listPlans(env: Env, id: Identity, limit = 50) {
   if (!env.DB) return [];
   const rows = await env.DB.prepare(
@@ -210,6 +247,10 @@ export async function approvePlan(
   if (!env.DB) throw new Error("DB binding required");
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
+  if (plan.status !== "pending_approval") throw new Error(`plan_not_pending_approval:${plan.status}`);
+  if (input.approve && (id.method !== "access" || !id.roles.includes("agent_approver"))) {
+    throw new Error("verified_human_approver_role_required");
+  }
 
   const access = await evaluateAccess(env, id, {
     action: "execute",
@@ -220,8 +261,21 @@ export async function approvePlan(
   if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
   const status = input.approve ? "approved" : "rejected";
+  if (input.approve) {
+    const actions = await loadProposedActions(env, id.tenant, planId);
+    const planDigest = await digestPlan(plan, actions);
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO agent_plan_approvals
+         (id, tenant, plan_id, plan_digest, approver_actor, auth_method, access_decision_id, reason, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, 'access', ?, ?, ?, ?)`
+    ).bind(
+      `appr_${crypto.randomUUID()}`, id.tenant, planId, planDigest, id.actor,
+      access.decision_id, (input.reason ?? "").slice(0, 500), now, now + APPROVAL_TTL_MS
+    ).run();
+  }
   await env.DB.prepare(
-    `UPDATE agent_plans SET status = ?, updated_at = ? WHERE tenant = ? AND id = ?`
+    `UPDATE agent_plans SET status = ?, updated_at = ? WHERE tenant = ? AND id = ? AND status = 'pending_approval'`
   )
     .bind(status, Date.now(), id.tenant, planId)
     .run();
@@ -255,7 +309,25 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
   });
   if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
 
-  const humanApproved = true; // status approved implies human (or auto-approved path)
+  const approval = await env.DB.prepare(
+    `SELECT * FROM agent_plan_approvals
+     WHERE tenant = ? AND plan_id = ? AND consumed_at IS NULL AND expires_at > ?
+     ORDER BY created_at DESC LIMIT 1`
+  ).bind(id.tenant, planId, Date.now()).first<any>();
+  if (!approval) throw new Error("durable_human_approval_missing_or_expired");
+
+  const proposedActions = await loadProposedActions(env, id.tenant, planId);
+  const currentDigest = await digestPlan(plan, proposedActions);
+  if (approval.plan_digest !== currentDigest) throw new Error("approved_plan_digest_mismatch");
+
+  const consumed = await env.DB.prepare(
+    `UPDATE agent_plan_approvals SET consumed_at = ?
+     WHERE id = ? AND tenant = ? AND plan_id = ? AND plan_digest = ?
+       AND consumed_at IS NULL AND expires_at > ?`
+  ).bind(Date.now(), approval.id, id.tenant, planId, currentDigest, Date.now()).run();
+  if ((consumed.meta?.changes ?? 0) !== 1) throw new Error("human_approval_already_consumed_or_expired");
+
+  const humanApproved = true; // derived only from a matching, unexpired, single-use persisted approval
 
   await env.DB.prepare(
     `UPDATE agent_plans SET status = 'executing', updated_at = ? WHERE tenant = ? AND id = ?`
