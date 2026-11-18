@@ -30,7 +30,7 @@ async function setup(now = 1_800_000_000) {
     for (const byte of bytes) binary += String.fromCharCode(byte);
     return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
   };
-  const issuer = new TokenIssuer(signer, { now: () => now, createJti: () => fixedJti });
+  const issuer = new TokenIssuer(signer, { now: () => now, createJti: () => fixedJti, allowedOrigins: ["https://api.example.test"] });
   const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(b64(rawPublic));
   return { issuer, verifier, now };
 }
@@ -77,4 +77,19 @@ test("rechaza misión con contexto inseguro o inválido antes de firmar", async 
     issuer.issueMissionToken(identity, { ...mission, origin: "http://169.254.169.254/latest" }),
     /invalid_recovery_origin/
   );
+});
+
+test("rechaza origen HTTPS que no esté en la allowlist del emisor", async () => {
+  const { issuer } = await setup();
+  await assert.rejects(
+    issuer.issueMissionToken(identity, { ...mission, origin: "https://attacker.example.test/health" }),
+    /recovery_origin_not_allowlisted/
+  );
+});
+
+test("un token emitido con reloj de ayer es rechazado por el verificador actual", async () => {
+  const yesterday = Math.floor(Date.now() / 1000) - 24 * 60 * 60;
+  const { issuer, verifier } = await setup(yesterday);
+  const token = await issuer.issueMissionToken(identity, mission);
+  await assert.rejects(verifier.verify(token), /mission_token_expired_or_lifetime_invalid/);
 });
