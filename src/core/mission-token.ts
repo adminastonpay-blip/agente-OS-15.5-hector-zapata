@@ -12,6 +12,8 @@ export interface MissionTokenPayload {
   iat: number;
   exp: number;
   missionId: string;
+  /** SHA-256 binding of missionId, origin, poolId, errorCode and severity. */
+  missionHash: string;
 }
 
 type JwtHeader = { alg: "EdDSA"; typ: "JWT" };
@@ -20,6 +22,21 @@ const ISSUER = "aston-os-gateway";
 const AUDIENCE = "recovery-workflow";
 const MAX_LIFETIME_SECONDS = 15 * 60;
 const CLOCK_SKEW_SECONDS = 30;
+export async function hashRecoveryMission(input: {
+  missionId: string;
+  origin: string;
+  poolId: string;
+  errorCode: number;
+  severity: "low" | "medium" | "high" | "critical";
+}): Promise<string> {
+  // Fixed-position tuple avoids object-key ordering ambiguity.
+  const canonical = JSON.stringify([
+    input.missionId, input.origin, input.poolId, input.errorCode, input.severity,
+  ]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function decodeBase64Url(segment: string): Uint8Array {
@@ -101,6 +118,7 @@ export class MissionTokenVerifier {
         typeof payload.tenantId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(payload.tenantId) ||
         typeof payload.missionId !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(payload.missionId) ||
         typeof payload.jti !== "string" || !UUID_V4.test(payload.jti) ||
+        typeof payload.missionHash !== "string" || !/^[a-f0-9]{64}$/.test(payload.missionHash) ||
         !Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp)) {
       throw new Error("mission_token_claims_invalid");
     }
