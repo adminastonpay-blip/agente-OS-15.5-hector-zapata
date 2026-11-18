@@ -39,6 +39,9 @@ jobs:
       - name: Security regression tests
         run: npm run test:security
 
+      - name: AI Control Gate red-team tests
+        run: npm run test:control-gate
+
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
 
