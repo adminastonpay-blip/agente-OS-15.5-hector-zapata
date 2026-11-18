@@ -4,7 +4,7 @@ import { RateLimiter } from "./rate-limiter";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-const issuedPermits = new WeakMap<object, { action: "chat"; payload: string; model: string }>();
+const issuedPermits = new WeakMap<object, { action: "chat" | "recovery_diagnosis"; payload: string; model: string }>();
 
 declare const permitBrand: unique symbol;
 export interface InferencePermit {
@@ -56,6 +56,80 @@ export class ControlGate {
         : { ok: false, status: 403, reason: "mission_token_replay" };
     } catch {
       return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
+    }
+  }
+
+
+  async authorizeAction(
+    payload: MissionTokenPayload,
+    actionContent: string
+  ): Promise<GateResult> {
+    if (payload.action !== "recovery_diagnosis" ||
+        !payload.tenantId?.trim() || !payload.sub?.trim() ||
+        typeof actionContent !== "string" || !actionContent.trim() ||
+        actionContent.length > 16_000) {
+      return { ok: false, status: 403, reason: "invalid_recovery_action" };
+    }
+    if (!this.env.AI || !this.env.SAFETY) {
+      return { ok: false, status: 503, reason: "control_gate_binding_unavailable" };
+    }
+
+    const identity: Identity = {
+      actor: payload.sub,
+      method: "access",
+      tenant: payload.tenantId,
+      roles: ["recovery_diagnosis"],
+      clearance: "confidential",
+    };
+    const contentHash = await this.sha256(actionContent);
+    try {
+      const safetyStub = this.env.SAFETY.get(
+        this.env.SAFETY.idFromName("aston-recovery-safety:" + payload.tenantId)
+      );
+      const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: {
+            tool: "recovery_diagnosis",
+            args: { mission_id: payload.missionId, content_sha256: contentHash },
+            context: { objective: "authorize recovery diagnosis", mission_id: payload.missionId },
+          },
+          identity,
+        }),
+      });
+      const decision = await evaluation.json<{ status?: string; policy?: unknown }>()
+        .catch((): { status?: string; policy?: unknown } => ({}));
+      if (!evaluation.ok || decision.status !== "allowed") {
+        return {
+          ok: false,
+          status: evaluation.ok ? 403 : 503,
+          reason: decision.status === "pending_approval"
+            ? "human_approval_required"
+            : decision.status === "denied"
+              ? "safety_policy_denied"
+              : "safety_evaluation_failed",
+          policy: decision.policy,
+        };
+      }
+
+      const rate = await new RateLimiter(this.env).check(payload.tenantId, "recovery_diagnosis");
+      if (!rate.allowed) {
+        return {
+          ok: false,
+          status: rate.unavailable ? 503 : 429,
+          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded",
+        };
+      }
+      const model = this.env.CHAT_MODEL;
+      if (!model || !model.startsWith("@cf/")) {
+        return { ok: false, status: 503, reason: "approved_recovery_model_not_configured" };
+      }
+      const permit = Object.freeze({});
+      issuedPermits.set(permit, { action: "recovery_diagnosis", payload: actionContent, model });
+      return { ok: true, permit: permit as unknown as InferencePermit };
+    } catch {
+      return { ok: false, status: 503, reason: "control_gate_unavailable" };
     }
   }
 
@@ -153,7 +227,7 @@ export class ControlGate {
 /** Internal capability consumption: one permit, one exact payload, one inference. */
 export function consumeInferencePermit(
   permit: InferencePermit,
-  action: "chat",
+  action: "chat" | "recovery_diagnosis",
   payload: string,
   model: string
 ): boolean {
