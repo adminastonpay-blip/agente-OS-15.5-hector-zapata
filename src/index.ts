@@ -1,5 +1,6 @@
 import type { Env } from "./types";
-import { chat } from "./lib/ai";
+import { ControlGate } from "./core/control-gate";
+import { ModelRunner } from "./core/model-runner";
 import { SessionMemory } from "./do/session";
 import { GraphResolver } from "./do/graph-do";
 import { Supervisor } from "./do/supervisor";
@@ -134,47 +135,6 @@ async function appendHistory(
 }
 
 
-async function enforceChatSafety(
-  env: Env,
-  message: string,
-  identity: Awaited<ReturnType<typeof resolveIdentity>>
-): Promise<{ ok: true } | { ok: false; status: number; error: string; policy?: unknown }> {
-  // SafetyInterlock is mandatory in every deployment. Missing or failing bindings deny the request.
-  if (!env.SAFETY) return { ok: false, status: 503, error: "chat_safety_binding_unavailable" };
-
-  try {
-    const stub = env.SAFETY.get(env.SAFETY.idFromName("aston-chat-safety"));
-    const response = await stub.fetch("https://do/evaluate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: {
-          tool: "chat_completion",
-          args: { message_length: message.length },
-          context: { objective: "staging chat request" },
-        },
-        identity,
-      }),
-    });
-    const result = await response.json<any>().catch(() => ({}));
-    if (!response.ok || result.status !== "allowed") {
-      return {
-        ok: false,
-        status: response.ok ? 403 : 503,
-        error: result.status === "pending_approval"
-          ? "chat_requires_human_approval"
-          : result.status === "denied"
-            ? "chat_denied_by_safety_policy"
-            : "chat_safety_evaluation_failed",
-        policy: result.policy,
-      };
-    }
-    return { ok: true };
-  } catch {
-    return { ok: false, status: 503, error: "chat_safety_unavailable" };
-  }
-}
-
 async function handleChat(req: Request, env: Env, deep = false): Promise<Response> {
   try {
     if (!env.AI) {
@@ -194,15 +154,25 @@ async function handleChat(req: Request, env: Env, deep = false): Promise<Respons
         : "default";
     const useDeep = deep || body.mode === "deep" || body.deep === true;
     const identity = await resolveIdentity(req, env);
-    const safety = await enforceChatSafety(env, message, identity);
-    if (!safety.ok) return json({ ok: false, error: safety.error, policy: safety.policy }, safety.status);
     const { stub, history } = await loadHistory(env, session_id, body, identity);
     const messages = [
-      { role: "system", content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
-      ...history.slice(-8).map((h: any) => ({ role: h.role, content: h.content })),
-      { role: "user", content: message },
+      { role: "system" as const, content: useDeep ? SYSTEM_SOLVE : SYSTEM_CHAT },
+      ...history.slice(-8).map((h: any) => ({
+        role: h.role as "user" | "assistant",
+        content: h.content,
+      })),
+      { role: "user" as const, content: message },
     ];
-    const out = await chat(env, messages, { max_tokens: useDeep ? 1024 : 512 });
+    const authorization = await new ControlGate(env).authorizeChat(identity, messages);
+    if (!authorization.ok) {
+      return json(
+        { ok: false, error: authorization.reason, policy: authorization.policy },
+        authorization.status
+      );
+    }
+    const out = await new ModelRunner(env).runChat(authorization.permit, messages, {
+      maxTokens: useDeep ? 1024 : 512,
+    });
     const answer = out.response || "";
     if (!isOutputSafeForCredentialLeak(answer)) {
       return json({ ok: false, error: "chat_output_guard_blocked" }, 502);
