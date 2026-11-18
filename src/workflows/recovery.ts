@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from "cloudflare:work
 import type { Env, MissionParams } from "../types";
 import { maskForAgent } from "../pii";
 import { probeRecoveryOrigin } from "../security/recovery-guard";
-import { MissionTokenVerifier } from "../core/mission-token";
+import { MissionTokenVerifier, hashRecoveryMission } from "../core/mission-token";
 import { ControlGate } from "../core/control-gate";
 import { ModelRunner } from "../core/model-runner";
 
@@ -10,7 +10,9 @@ export class RecoveryWorkflow extends WorkflowEntrypoint<Env, MissionParams> {
   async run(event: WorkflowEvent<MissionParams>, step: WorkflowStep) {
     const m = event.payload;
     if (!m || typeof m.id !== "string" || !m.id ||
-        typeof m.origin !== "string" || !Number.isSafeInteger(m.error_code) ||
+        typeof m.origin !== "string" || typeof m.pool_id !== "string" ||
+        !m.pool_id.trim() || !Number.isSafeInteger(m.error_code) ||
+        !["low", "medium", "high", "critical"].includes(m.severity) ||
         typeof m.mission_token !== "string" || !m.mission_token) {
       throw new Error("invalid_recovery_mission_payload");
     }
@@ -28,6 +30,14 @@ export class RecoveryWorkflow extends WorkflowEntrypoint<Env, MissionParams> {
       );
       const claims = await verifier.verify(m.mission_token);
       if (claims.missionId !== m.id) throw new Error("mission_token_mission_mismatch");
+      const missionHash = await hashRecoveryMission({
+        missionId: m.id,
+        origin: m.origin,
+        poolId: m.pool_id,
+        errorCode: m.error_code,
+        severity: m.severity,
+      });
+      if (missionHash !== claims.missionHash) throw new Error("mission_token_payload_mismatch");
       const claimed = await new ControlGate(this.env).consumeMissionToken(claims);
       if (!claimed.ok) throw new Error(claimed.reason);
       return claims;
