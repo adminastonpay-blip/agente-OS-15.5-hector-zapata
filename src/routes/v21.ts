@@ -60,9 +60,9 @@ export async function handleV21(
       ids.push(id);
       try {
         await env.DB.prepare(
-          `INSERT INTO documents (id, source, chunk, created_at) VALUES (?, ?, ?, ?)`
+          `INSERT INTO documents (id, tenant, source, chunk, created_at) VALUES (?, ?, ?, ?, ?)`
         )
-          .bind(id, source, part, Date.now())
+          .bind(id, namespace, source, part, Date.now())
           .run();
       } catch (error) {
         console.error("[RAG_D1_PERSISTENCE_FAILED]", error);
