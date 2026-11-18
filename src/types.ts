@@ -11,6 +11,8 @@ export interface Env {
   SIMULATION?: DurableObjectNamespace;
   MISSION?: DurableObjectNamespace;
   SAFETY?: DurableObjectNamespace;
+  /** Tenant-partitioned, SQLite-backed single-use mission token claims. */
+  REPLAY_GUARD?: DurableObjectNamespace;
 
   // Optional platform resources
   DB?: D1Database;
@@ -41,6 +43,8 @@ export interface Env {
   CF_API_TOKEN?: string;
   /** Comma-separated HTTPS origins allowed for recovery HEAD probes. Empty means deny all. */
   RECOVERY_ALLOWED_ORIGINS?: string;
+  /** Base64url-encoded raw 32-byte Ed25519 public key; configure out-of-band. */
+  MISSION_TOKEN_PUBLIC_KEY?: string;
 }
 
 export interface Identity {
