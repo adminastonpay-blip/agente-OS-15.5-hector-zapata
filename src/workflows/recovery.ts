@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from "cloudflare:workers";
 import type { Env, MissionParams } from "../types";
-import { maskForAgent, restoreMaskedDataFromVault } from "../pii";
+import { maskForAgent } from "../pii";
 import { isAllowedRecoveryOrigin } from "../security/recovery-guard";
 import { MissionTokenVerifier } from "../core/mission-token";
 import { ControlGate } from "../core/control-gate";
