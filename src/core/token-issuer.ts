@@ -21,6 +21,8 @@ export interface Ed25519MissionSigner {
 export interface TokenIssuerOptions {
   now?: () => number;
   createJti?: () => string;
+  /** Exact HTTPS origins approved by the issuer policy; missing/empty denies issuance. */
+  allowedOrigins?: string[];
 }
 
 const ISSUER = "aston-os-gateway";
@@ -68,6 +70,7 @@ function validateMission(mission: RecoveryMissionContext): void {
 export class TokenIssuer {
   private readonly now: () => number;
   private readonly createJti: () => string;
+  private readonly allowedOrigins: Set<string>;
 
   constructor(
     private readonly signer: Ed25519MissionSigner,
@@ -75,6 +78,7 @@ export class TokenIssuer {
   ) {
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));
     this.createJti = options.createJti ?? (() => crypto.randomUUID());
+    this.allowedOrigins = new Set(options.allowedOrigins ?? []);
   }
 
   async issueMissionToken(
@@ -96,6 +100,9 @@ export class TokenIssuer {
     }
 
     validateMission(mission);
+    if (this.allowedOrigins.size === 0 || !this.allowedOrigins.has(new URL(mission.origin).origin)) {
+      throw new Error("recovery_origin_not_allowlisted");
+    }
     const iat = this.now();
     const jti = this.createJti();
     if (!Number.isSafeInteger(iat) || !UUID_V4.test(jti)) {
