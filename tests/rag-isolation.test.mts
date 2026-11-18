@@ -23,7 +23,7 @@ function aiMock() {
   };
 }
 
-describe("RAG tenant isolation and request security — TDD Red Phase", () => {
+describe("RAG tenant isolation and request security — TDD Green Phase", () => {
   test("Tenant B must not retrieve Tenant A data; ingest metadata and query filter must both be tenant-bound", async () => {
     const stored: any[] = [];
     const queryCalls: any[] = [];
