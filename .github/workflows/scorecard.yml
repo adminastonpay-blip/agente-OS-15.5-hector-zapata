@@ -8,7 +8,8 @@ on:
   schedule:
     - cron: '20 7 * * 1'
   push:
-    branches: [ main ]
+    branches: [ main, feat/ai-control-gate ]
+  workflow_dispatch:
 
 permissions: read-all
 
@@ -17,10 +18,11 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
-      id-token: write
       contents: read
       actions: read
+      pull-requests: read
+      security-events: write
+      id-token: write
 
     steps:
       - name: "Checkout code"
