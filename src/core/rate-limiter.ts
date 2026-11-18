@@ -12,7 +12,7 @@ export type RateLimitResult =
 export class RateLimiter {
   constructor(private readonly env: Env) {}
 
-  async check(tenant: string, action: string): Promise<RateLimitResult> {
+  async check(tenant: string, action: string, limit = 60, windowMs = 60_000): Promise<RateLimitResult> {
     const safetyNamespace = this.env.SAFETY;
     if (!safetyNamespace || !tenant || !action) {
       return { allowed: false, unavailable: true };
@@ -24,7 +24,7 @@ export class RateLimiter {
       const response = await stub.fetch("https://rate.internal/rate-limit/check", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ limit: 60, window_ms: 60_000 }),
+        body: JSON.stringify({ limit, window_ms: windowMs }),
       });
       if (response.status === 429) return { allowed: false };
       if (!response.ok) return { allowed: false, unavailable: true };
