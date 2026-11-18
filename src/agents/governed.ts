@@ -253,10 +253,6 @@ export async function approvePlan(
   if (!env.DB) throw new Error("DB binding required");
   const plan = await getPlan(env, id.tenant, planId);
   if (!plan) throw new Error("plan not found");
-  if (plan.status !== "pending_approval") throw new Error(`plan_not_pending_approval:${plan.status}`);
-  if (input.approve && !isVerifiedHumanApprover(id)) {
-    throw new Error("verified_human_approver_role_required");
-  }
 
   const access = await evaluateAccess(env, id, {
     action: "execute",
@@ -265,6 +261,11 @@ export async function approvePlan(
     resource_id: planId,
   });
   if (!isExplicitAccessAllow(access.effect)) throw new Error(`access_not_allowed:${access.effect}:${access.reason}`);
+
+  if (plan.status !== "pending_approval") throw new Error(`plan_not_pending_approval:${plan.status}`);
+  if (input.approve && !isVerifiedHumanApprover(id)) {
+    throw new Error("verified_human_approver_role_required");
+  }
 
   const status = input.approve ? "approved" : "rejected";
   let approvalId: string | null = null;
