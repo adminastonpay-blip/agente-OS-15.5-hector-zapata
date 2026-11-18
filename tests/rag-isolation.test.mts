@@ -1,7 +1,6 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { handleV21 } from "../src/routes/v21.ts";
-import { enforceRequestBodyLimit } from "../src/security/request-guard.ts";
 import worker from "../src/index.ts";
 
 const json = (data: unknown, status = 200) =>
