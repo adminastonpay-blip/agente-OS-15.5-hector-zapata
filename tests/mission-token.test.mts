@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { MissionTokenVerifier, type MissionTokenPayload } from "../src/core/mission-token.ts";
 import { ControlGate } from "../src/core/control-gate.ts";
+import { ReplayGuard } from "../src/core/replay-guard.ts";
 
 const b64url = (bytes: Uint8Array) => {
   let binary = "";
@@ -92,4 +93,55 @@ test("6. un jti verificado se consume una sola vez", async () => {
   assert.deepEqual(await gate.consumeMissionToken(payload), {
     ok: false, status: 403, reason: "mission_token_replay"
   });
+});
+
+test("7. Durable Object rejects concurrent duplicate jti claims", async () => {
+  const consumed = new Map<string, number>();
+  let changes = 0;
+  const sql = {
+    exec(query: string, ...args: any[]) {
+      if (query.startsWith("DELETE FROM consumed_mission_jti")) {
+        const now = Number(args[0]);
+        for (const [key, row] of consumed) if (row <= now) consumed.delete(key);
+        changes = 0;
+        return { toArray: () => [] };
+      }
+      if (query.startsWith("INSERT OR IGNORE INTO consumed_mission_jti")) {
+        const jti = String(args[0]);
+        if (consumed.has(jti)) changes = 0;
+        else { consumed.set(jti, Number(args[1])); changes = 1; }
+        return { toArray: () => [] };
+      }
+      if (query.includes("SELECT changes()")) {
+        return { toArray: () => [{ inserted: changes }] };
+      }
+      return { toArray: () => [] };
+    },
+  };
+  const guard = new ReplayGuard({ storage: { sql } } as any);
+  const now = Math.floor(Date.now() / 1000);
+  const request = () => guard.fetch(new Request("https://replay.internal/consume", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jti: "9f1c4d20-6b8a-4a31-9d20-0a2f5e6c7b81",
+      exp: now + 300,
+    }),
+  }));
+  const responses = await Promise.all([request(), request()]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
+});
+
+test("8. Durable Object rejects expired or overlong replay claims", async () => {
+  const sql = { exec: () => ({ toArray: () => [{ inserted: 0 }] }) };
+  const guard = new ReplayGuard({ storage: { sql } } as any);
+  const response = await guard.fetch(new Request("https://replay.internal/consume", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jti: "9f1c4d20-6b8a-4a31-9d20-0a2f5e6c7b81",
+      exp: Math.floor(Date.now() / 1000) - 1,
+    }),
+  }));
+  assert.equal(response.status, 400);
 });
