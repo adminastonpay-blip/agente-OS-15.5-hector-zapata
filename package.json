@@ -15,7 +15,8 @@
     "test:mission-token": "node --experimental-loader ./tests/ts-loader.mjs --test tests/mission-token.test.mts",
     "test:recovery-gate": "node --experimental-loader ./tests/ts-loader.mjs --test tests/recovery-control-gate.test.mts",
     "test:token-issuer": "node --experimental-loader ./tests/ts-loader.mjs --test tests/token-issuer.test.mts",
-    "test:recovery-e2e": "node --experimental-loader ./tests/ts-loader.mjs --test tests/recovery-e2e.test.mts"
+    "test:recovery-e2e": "node --experimental-loader ./tests/ts-loader.mjs --test tests/recovery-e2e.test.mts",
+    "test:rag-isolation": "node --experimental-loader ./tests/ts-loader.mjs --test tests/rag-isolation.test.mts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261106.1",
