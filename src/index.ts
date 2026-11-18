@@ -8,6 +8,9 @@ import { AgentNode } from "./do/agent-node";
 import { SimulationTwin } from "./do/simulation";
 import { MissionBrain } from "./do/mission-brain";
 import { SafetyInterlock } from "./do/safety-interlock";
+import { RecoveryWorkflow } from "./workflows/recovery";
+import { MissionTokenVerifier } from "./core/mission-token";
+import { isAllowedRecoveryOrigin } from "./security/recovery-guard";
 import { ReplayGuard } from "./core/replay-guard";
 import {
   VOICE_PROFILES,
@@ -44,6 +47,7 @@ export {
   MissionBrain,
   SafetyInterlock,
   ReplayGuard,
+  RecoveryWorkflow,
 };
 
 const VERSION = "21.6.3-cf-audit";
@@ -316,6 +320,50 @@ export default {
     const access = authorizeApiRequest(req, path, identity);
     if (!access.allowed) {
       return json({ ok: false, error: access.error }, access.status);
+    }
+
+    if (path === "/v1/recovery/diagnose" && req.method === "POST") {
+      if (!env.RECOVERY_WORKFLOW || !env.MISSION_TOKEN_PUBLIC_KEY) {
+        return json({ ok: false, error: "recovery_workflow_or_token_key_unavailable" }, 503);
+      }
+      const body = await req.json<any>().catch(() => null);
+      if (!body || typeof body.mission_token !== "string" ||
+          typeof body.origin !== "string" || typeof body.pool_id !== "string" ||
+          !Number.isSafeInteger(body.error_code) ||
+          !["low", "medium", "high", "critical"].includes(body.severity)) {
+        return json({ ok: false, error: "invalid_recovery_request" }, 400);
+      }
+      if (!isAllowedRecoveryOrigin(body.origin, env.RECOVERY_ALLOWED_ORIGINS)) {
+        return json({ ok: false, error: "recovery_origin_not_allowlisted" }, 403);
+      }
+      try {
+        const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(
+          env.MISSION_TOKEN_PUBLIC_KEY
+        );
+        const claims = await verifier.verify(body.mission_token);
+        // Bind the signed delegation to the independently authenticated API caller.
+        if (claims.sub !== identity.actor || claims.tenantId !== identity.tenant ||
+            claims.action !== "recovery_diagnosis") {
+          return json({ ok: false, error: "mission_token_identity_mismatch" }, 403);
+        }
+        const mission = {
+          id: claims.missionId,
+          origin: body.origin,
+          pool_id: body.pool_id.slice(0, 128),
+          error_code: body.error_code,
+          severity: body.severity,
+          created_at: Date.now(),
+          created_by: identity.actor,
+          mission_token: body.mission_token,
+        };
+        const instance = await env.RECOVERY_WORKFLOW.create({
+          id: crypto.randomUUID(),
+          params: mission,
+        });
+        return json({ ok: true, workflow_id: instance.id, status: "accepted" }, 202);
+      } catch {
+        return json({ ok: false, error: "recovery_authorization_or_start_failed" }, 403);
+      }
     }
 
     if (path === "/v1/audit/anchor/verify" && req.method === "POST") {
