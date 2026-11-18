@@ -52,6 +52,9 @@ jobs:
       - name: Recovery action gate red-team tests
         run: npm run test:recovery-gate
 
+      - name: Recovery end-to-end security chain
+        run: npm run test:recovery-e2e
+
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
 
