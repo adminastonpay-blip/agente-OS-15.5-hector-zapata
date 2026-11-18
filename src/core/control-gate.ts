@@ -50,7 +50,7 @@ export class ControlGate {
       if (!response.ok) {
         return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
       }
-      const result = await response.json<{ fresh?: boolean }>().catch(() => ({}));
+      const result = await response.json<{ fresh?: boolean }>().catch((): { fresh?: boolean } => ({}));
       return result.fresh === true
         ? { ok: true }
         : { ok: false, status: 403, reason: "mission_token_replay" };
