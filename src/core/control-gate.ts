@@ -1,4 +1,5 @@
 import type { Env, Identity } from "../types";
+import type { MissionTokenPayload } from "./mission-token";
 import { RateLimiter } from "./rate-limiter";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -20,6 +21,43 @@ export type GateResult =
  */
 export class ControlGate {
   constructor(private readonly env: Env) {}
+
+
+  /**
+   * Atomically claims a verified Recovery token before any policy evaluation
+   * or inference. The tenant selects the DO partition; the signed jti is the key.
+   */
+  async consumeMissionToken(payload: MissionTokenPayload): Promise<
+    { ok: true } | { ok: false; status: 403 | 503; reason: string }
+  > {
+    if (payload.action !== "recovery_diagnosis" || !payload.tenantId || !payload.jti) {
+      return { ok: false, status: 403, reason: "mission_token_scope_invalid" };
+    }
+    const namespace = this.env.REPLAY_GUARD;
+    if (!namespace) {
+      return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
+    }
+    try {
+      const stub = namespace.get(namespace.idFromName("recovery-replay:" + payload.tenantId));
+      const response = await stub.fetch("https://replay.internal/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jti: payload.jti, exp: payload.exp }),
+      });
+      if (response.status === 409) {
+        return { ok: false, status: 403, reason: "mission_token_replay" };
+      }
+      if (!response.ok) {
+        return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
+      }
+      const result = await response.json<{ fresh?: boolean }>().catch(() => ({}));
+      return result.fresh === true
+        ? { ok: true }
+        : { ok: false, status: 403, reason: "mission_token_replay" };
+    } catch {
+      return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
+    }
+  }
 
   async authorizeChat(identity: Identity, messages: ChatMessage[]): Promise<GateResult> {
     if (
