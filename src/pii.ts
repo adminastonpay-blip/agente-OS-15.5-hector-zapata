@@ -33,8 +33,11 @@ export async function maskForAgent(
   return { masked, vault };
 }
 
-export function restoreFromVault(text: string, vault: Map<string, string>): string {
+export function restoreMaskedDataFromVault(text: string, vault: Map<string, string>): string {
   let out = text;
   for (const [tok, real] of vault) out = out.replaceAll(tok, real);
   return out;
 }
+
+/** @deprecated This restores masked PII tokens, not backups. */
+export const restoreFromVault = restoreMaskedDataFromVault;
