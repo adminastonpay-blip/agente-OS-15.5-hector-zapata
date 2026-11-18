@@ -1,4 +1,4 @@
-import type { Identity } from "../types.ts";
+import type { Identity } from "../types";
 import { hashRecoveryMission, type MissionTokenPayload } from "./mission-token.ts";
 
 export interface RecoveryMissionContext {
