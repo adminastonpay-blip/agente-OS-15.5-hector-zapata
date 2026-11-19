@@ -15,6 +15,6 @@ const STAGING_ALLOWED_PATHS = new Set([
  */
 export function isStagingRouteAllowed(profile: string | undefined, path: string): boolean {
   if (!String(profile || "").toLowerCase().includes("staging")) return true;
-  const normalized = path.replace(/\\/+$/, "") || "/";
+  const normalized = path.replace(/\/+$/, "") || "/";
   return STAGING_ALLOWED_PATHS.has(normalized);
 }
