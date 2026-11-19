@@ -138,7 +138,8 @@ export async function handleDefense(
     const approval_id = String(body.approval_id || "");
     if (!approval_id) return json({ ok: false, error: "approval_id required" }, 400);
     const approved = body.approved !== false;
-    const operator = String(body.operator || identity.actor || "operator");
+    // The actor must come from the authenticated identity, never caller-controlled JSON.
+    const operator = identity.actor;
     const stub = env.SAFETY.get(env.SAFETY.idFromName(tenantKeySafe(identity)));
     const res = await stub.fetch("https://do/decide", {
       method: "POST",
