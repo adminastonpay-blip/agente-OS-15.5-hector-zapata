@@ -58,6 +58,16 @@ export async function handleV21(
     for (const part of parts) {
       const id = `doc_${crypto.randomUUID()}`;
       ids.push(id);
+      let vec: number[];
+      try {
+        const [embedding] = await embed(env, identity, [part]);
+        if (!Array.isArray(embedding) || embedding.length === 0) throw new Error("empty_embedding");
+        vec = embedding;
+      } catch (error: any) {
+        console.error("[RAG_EMBEDDING_AUTHORIZATION_OR_INFERENCE_FAILED]", error?.message || error);
+        return json({ ok: false, error: "Embedding authorization or inference failed" }, 502);
+      }
+
       try {
         await env.DB.prepare(
           `INSERT INTO documents (id, tenant, source, chunk, created_at, index_status) VALUES (?, ?, ?, ?, ?, ?)`
@@ -70,7 +80,6 @@ export async function handleV21(
       }
 
       try {
-        const [vec] = await embed(env, [part]);
         await env.VECTORIZE.upsert([
           {
             id,
@@ -126,7 +135,7 @@ export async function handleV21(
       });
     }
     try {
-      const [qvec] = await embed(env, [q]);
+      const [qvec] = await embed(env, identity, [q]);
       const requestedTopK = Number(body.topK ?? 5);
       const topK = Number.isFinite(requestedTopK)
         ? Math.min(20, Math.max(1, Math.floor(requestedTopK)))
@@ -362,7 +371,7 @@ export async function handleV21(
     let context = "";
     if (env.VECTORIZE && env.AI) {
       try {
-        const [qvec] = await embed(env, [message]);
+        const [qvec] = await embed(env, identity, [message]);
         const m = await env.VECTORIZE.query(qvec, {
           topK: 3,
           returnMetadata: "all",
@@ -377,7 +386,7 @@ export async function handleV21(
         /* ignore */
       }
     }
-    const out = await chat(env, [
+    const out = await chat(env, identity, [
       {
         role: "system",
         content:

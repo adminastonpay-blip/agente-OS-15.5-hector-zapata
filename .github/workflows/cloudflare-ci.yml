@@ -38,6 +38,9 @@ jobs:
       - name: TypeScript check
         run: npm run check
 
+      - name: AI Control Gate static guardrail
+        run: npm run check-ai-guardrail
+
       - name: Security regression tests
         run: npm run test:security
 

@@ -140,3 +140,84 @@ test("7. permite exactamente una inferencia cuando política y rate limit autori
   assert.equal(output.model, "@cf/meta/llama-3.1-8b-instruct");
   assert.deepEqual(calls, { evaluate: 1, rate: 1, ai: 1 });
 });
+
+
+test("8. embeddings permit is scoped, bound to payload, and single-use", async () => {
+  const { env, calls } = makeEnv();
+  const payload = { text: ["tenant data"] };
+  const result = await new ControlGate(env).authorizeInference(
+    identity, "embeddings", payload, "@cf/baai/bge-m3",
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const runner = new ModelRunner(env);
+  await runner.execute(result.permit, "embeddings", "@cf/baai/bge-m3", payload);
+  await assert.rejects(
+    runner.execute(result.permit, "embeddings", "@cf/baai/bge-m3", payload),
+    /invalid_or_replayed_inference_permit/,
+  );
+  assert.equal(calls.ai, 1);
+});
+
+test("9. TTS permit cannot authorize embeddings or a modified payload", async () => {
+  const { env, calls } = makeEnv();
+  const payload = { text: "hola" };
+  const result = await new ControlGate(env).authorizeInference(
+    identity, "tts", payload, "@cf/deepgram/aura-2-es",
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const runner = new ModelRunner(env);
+  await assert.rejects(
+    runner.execute(result.permit, "embeddings", "@cf/deepgram/aura-2-es", payload),
+    /invalid_or_replayed_inference_permit/,
+  );
+  await assert.rejects(
+    runner.execute(result.permit, "tts", "@cf/deepgram/aura-2-es", { text: "texto alterado" }),
+    /invalid_or_replayed_inference_permit/,
+  );
+  assert.equal(calls.ai, 0);
+});
+
+test("10. embeddings and TTS fail closed without a verified tenant identity", async () => {
+  const { env, calls } = makeEnv();
+  const result = await new ControlGate(env).authorizeInference(
+    { ...identity, method: "public", tenant: "tenant-red-team" },
+    "embeddings",
+    { text: ["public data"] },
+    "@cf/baai/bge-m3",
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.status, 403);
+  assert.equal(calls.ai, 0);
+  assert.equal(calls.evaluate, 0);
+});
+
+
+test("11. chat fallback model is explicitly bound to its one-use permit", async () => {
+  const { env, calls } = makeEnv();
+  const fallbackModel = "@cf/meta/llama-3.1-8b-instruct-fast";
+  const result = await new ControlGate(env).authorizeChat(identity, messages, fallbackModel);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const output = await new ModelRunner(env).runChat(
+    result.permit, messages, { maxTokens: 128 }, fallbackModel, false,
+  );
+  assert.equal(output.model, fallbackModel);
+  assert.equal(calls.ai, 1);
+});
+
+test("12. direct retry requires a newly authorized permit", async () => {
+  const { env, calls } = makeEnv();
+  const gate = new ControlGate(env);
+  const first = await gate.authorizeInference(identity, "embeddings", { text: ["x"] }, "@cf/baai/bge-m3");
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  const runner = new ModelRunner(env);
+  await runner.execute(first.permit, "embeddings", "@cf/baai/bge-m3", { text: ["x"] }, true);
+  const second = await gate.authorizeInference(identity, "embeddings", { text: ["x"] }, "@cf/baai/bge-m3");
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  await runner.execute(second.permit, "embeddings", "@cf/baai/bge-m3", { text: ["x"] }, false);
+  assert.equal(calls.ai, 2);
+});

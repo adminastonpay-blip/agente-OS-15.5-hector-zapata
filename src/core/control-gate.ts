@@ -4,7 +4,10 @@ import { RateLimiter } from "./rate-limiter";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-const issuedPermits = new WeakMap<object, { action: "chat" | "recovery_diagnosis"; payload: string; model: string }>();
+export type InferenceScope = "chat" | "embeddings" | "tts" | "recovery_diagnosis";
+
+const INFERENCE_PERMIT_TTL_MS = 60_000;
+const issuedPermits = new WeakMap<object, { action: InferenceScope; payload: string; model: string; expiresAt: number }>();
 
 declare const permitBrand: unique symbol;
 export interface InferencePermit {
@@ -126,14 +129,88 @@ export class ControlGate {
         return { ok: false, status: 503, reason: "approved_recovery_model_not_configured" };
       }
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "recovery_diagnosis", payload: actionContent, model });
+      issuedPermits.set(permit, { action: "recovery_diagnosis", payload: actionContent, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
     }
   }
 
-  async authorizeChat(identity: Identity, messages: ChatMessage[]): Promise<GateResult> {
+  /**
+   * Issues a one-use capability for non-chat model operations.
+   * The identity must come from resolveIdentity; raw tenant strings are never accepted.
+   */
+  async authorizeInference(
+    identity: Identity,
+    action: "embeddings" | "tts",
+    payload: Record<string, unknown>,
+    model: string
+  ): Promise<GateResult> {
+    if (
+      !identity ||
+      identity.method === "public" ||
+      !identity.actor?.trim() ||
+      !identity.tenant?.trim() ||
+      !Array.isArray(identity.roles) ||
+      !identity.clearance ||
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      !model.startsWith("@cf/")
+    ) {
+      return { ok: false, status: 403, reason: "verified_inference_identity_required" };
+    }
+    const safety = this.env.SAFETY;
+    if (!this.env.AI || !safety) {
+      return { ok: false, status: 503, reason: "control_gate_binding_unavailable" };
+    }
+    const serialized = JSON.stringify(payload);
+    if (!serialized || serialized.length > 32_000) {
+      return { ok: false, status: 403, reason: "inference_payload_too_large" };
+    }
+    try {
+      const safetyStub = safety.get(safety.idFromName("aston-model-safety:" + identity.tenant));
+      const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: {
+            tool: action === "embeddings" ? "model_embeddings" : "model_tts",
+            args: {
+              model,
+              payload: serialized.slice(0, 8_000),
+              payload_sha256: await this.sha256(serialized),
+            },
+            context: { objective: action === "embeddings" ? "authorize tenant-scoped embeddings" : "authorize text-to-speech" },
+          },
+          identity,
+        }),
+      });
+      const decision = await evaluation.json<{ status?: string; policy?: unknown }>()
+        .catch((): { status?: string; policy?: unknown } => ({}));
+      if (!evaluation.ok || decision.status !== "allowed") {
+        return {
+          ok: false,
+          status: evaluation.ok ? 403 : 503,
+          reason: decision.status === "pending_approval" ? "human_approval_required"
+            : decision.status === "denied" ? "safety_policy_denied" : "safety_evaluation_failed",
+          policy: decision.policy,
+        };
+      }
+      const rate = await new RateLimiter(this.env).check(identity.tenant, action);
+      if (!rate.allowed) {
+        return { ok: false, status: rate.unavailable ? 503 : 429,
+          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded" };
+      }
+      const permit = Object.freeze({});
+      issuedPermits.set(permit, { action, payload: serialized, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
+      return { ok: true, permit: permit as unknown as InferencePermit };
+    } catch {
+      return { ok: false, status: 503, reason: "control_gate_unavailable" };
+    }
+  }
+
+  async authorizeChat(identity: Identity, messages: ChatMessage[], modelOverride?: string): Promise<GateResult> {
     if (
       !identity ||
       identity.method === "public" ||
@@ -205,13 +282,13 @@ export class ControlGate {
         };
       }
 
-      const model = this.env.CHAT_MODEL;
+      const model = modelOverride || this.env.CHAT_MODEL;
       if (!model || !model.startsWith("@cf/")) {
         return { ok: false, status: 503, reason: "approved_chat_model_not_configured" };
       }
 
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "chat", payload, model });
+      issuedPermits.set(permit, { action: "chat", payload, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
@@ -227,7 +304,7 @@ export class ControlGate {
 /** Internal capability consumption: one permit, one exact payload, one inference. */
 export function consumeInferencePermit(
   permit: InferencePermit,
-  action: "chat" | "recovery_diagnosis",
+  action: InferenceScope,
   payload: string,
   model: string
 ): boolean {
