@@ -34,7 +34,7 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
       const normalized = job.text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
       const chunks = chunk(normalized);
       const vectors = await embed(env, identity, chunks);
-      const upserts = chunks.map((value, i) => ({
+      const upserts = chunks.map((value: string, i: number) => ({
         id: `${source}#${i}-${crypto.randomUUID().slice(0, 8)}`,
         values: vectors[i],
         namespace: tenant,

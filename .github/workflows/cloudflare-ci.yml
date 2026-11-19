@@ -6,6 +6,7 @@ on:
       - main
       - feat/ai-control-gate
       - feat/rag-tenant-isolation
+      - aston/centralized-inference-gate
   pull_request:
     branches:
       - main
