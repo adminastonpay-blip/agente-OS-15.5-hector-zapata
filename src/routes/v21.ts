@@ -60,6 +60,16 @@ export async function handleV21(
     for (const part of parts) {
       const id = `doc_${crypto.randomUUID()}`;
       ids.push(id);
+      let vec: number[];
+      try {
+        const [embedding] = await embed(env, identity, [part]);
+        if (!Array.isArray(embedding) || embedding.length === 0) throw new Error("empty_embedding");
+        vec = embedding;
+      } catch (error: any) {
+        console.error("[RAG_EMBEDDING_AUTHORIZATION_OR_INFERENCE_FAILED]", error?.message || error);
+        return json({ ok: false, error: "Embedding authorization or inference failed" }, 502);
+      }
+
       try {
         await env.DB.prepare(
           `INSERT INTO documents (id, tenant, source, chunk, created_at, index_status) VALUES (?, ?, ?, ?, ?, ?)`
@@ -72,7 +82,6 @@ export async function handleV21(
       }
 
       try {
-        const [vec] = await embed(env, identity, [part]);
         await env.VECTORIZE.upsert([
           {
             id,
