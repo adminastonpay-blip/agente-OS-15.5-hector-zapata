@@ -22,6 +22,20 @@ database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
+# Cloudflare Workers Preview must use isolated staging data resources.
+# Keep production bindings above unchanged; Preview overrides DB and Vectorize.
+[previews]
+
+[[previews.d1_databases]]
+binding = "DB"
+database_name = "aston-rag-staging-db"
+database_id = "457d72d6-388b-4dad-bdd0-b32d3e905e00"
+migrations_dir = "migrations"
+
+[[previews.vectorize]]
+binding = "VECTORIZE"
+index_name = "aston-rag-staging-index"
+
 # —— Durable Object bindings (runtime access via env.*) ——
 [[durable_objects.bindings]]
 name = "SESSION"
