@@ -7,6 +7,8 @@ import { createObjectType, createObject, createLink, cascadeImpact } from "../on
 import { emitLineage, getLineageTree } from "../lineage";
 import { maskForAgent } from "../pii";
 import { embed, chat, chunk } from "../lib/ai";
+import { ControlGate } from "../core/control-gate";
+import { ModelRunner } from "../core/model-runner";
 
 // Vectorize namespaces are limited to 64 UTF-8 bytes. Derive only from
 // the authenticated identity; never accept a namespace from the request body.
@@ -70,7 +72,7 @@ export async function handleV21(
       }
 
       try {
-        const [vec] = await embed(env, [part]);
+        const [vec] = await embed(env, identity, [part]);
         await env.VECTORIZE.upsert([
           {
             id,
@@ -126,7 +128,7 @@ export async function handleV21(
       });
     }
     try {
-      const [qvec] = await embed(env, [q]);
+      const [qvec] = await embed(env, identity, [q]);
       const requestedTopK = Number(body.topK ?? 5);
       const topK = Number.isFinite(requestedTopK)
         ? Math.min(20, Math.max(1, Math.floor(requestedTopK)))
@@ -362,7 +364,7 @@ export async function handleV21(
     let context = "";
     if (env.VECTORIZE && env.AI) {
       try {
-        const [qvec] = await embed(env, [message]);
+        const [qvec] = await embed(env, identity, [message]);
         const m = await env.VECTORIZE.query(qvec, {
           topK: 3,
           returnMetadata: "all",
@@ -377,7 +379,7 @@ export async function handleV21(
         /* ignore */
       }
     }
-    const out = await chat(env, [
+    const out = await chat(env, identity, [
       {
         role: "system",
         content:
