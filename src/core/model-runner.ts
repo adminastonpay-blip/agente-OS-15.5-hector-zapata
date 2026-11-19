@@ -18,6 +18,31 @@ export class ModelRunner {
   constructor(private readonly env: Env) {}
 
 
+  /**
+   * Executes a one-use capability for embeddings or TTS.
+   * Streaming is intentionally not represented by InferenceScope.
+   */
+  async execute<T = unknown>(
+    permit: InferencePermit,
+    operation: Exclude<InferenceScope, "chat" | "recovery_diagnosis">,
+    model: string,
+    payload: Record<string, unknown>
+  ): Promise<T> {
+    const ai = this.env.AI;
+    if (!ai || !model.startsWith("@cf/")) {
+      throw new Error("model_runner_not_configured");
+    }
+    const serialized = JSON.stringify(payload);
+    if (!consumeInferencePermit(permit, operation, serialized, model)) {
+      throw new Error("invalid_or_replayed_inference_permit");
+    }
+    return await ai.run(model as any, payload as any,
+      this.env.AI_GATEWAY_ID
+        ? ({ gateway: { id: this.env.AI_GATEWAY_ID } } as any)
+        : undefined
+    ) as T;
+  }
+
   async runInference(
     permit: InferencePermit,
     action: "recovery_diagnosis",
