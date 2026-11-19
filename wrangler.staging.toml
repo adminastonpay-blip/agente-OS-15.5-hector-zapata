@@ -1,6 +1,7 @@
 # Isolated ASTON OS audit staging Worker.
 # Configure AUDIT_SECRET (minimum 32 characters) in Cloudflare before testing the audit endpoint.
-# This environment intentionally has no D1, Queue, or production bindings.
+# This environment uses a dedicated staging D1 and Vectorize index only.
+# It intentionally has no production D1, Queue, or production bindings.
 # R2 anchoring is disabled until the staging bucket is provisioned and verified.
 name = "aston-os-21x-audit-staging"
 main = "src/index.ts"
@@ -11,6 +12,13 @@ workers_dev = true # isolated workers.dev endpoint; staging route guard limits e
 
 [ai]
 binding = "AI"
+
+# Dedicated D1 database for isolated RAG staging only.
+[[d1_databases]]
+binding = "DB"
+database_name = "aston-rag-staging-db"
+database_id = "457d72d6-388b-4dad-bdd0-b32d3e905e00"
+migrations_dir = "migrations"
 
 # Dedicated Vectorize index for isolated RAG staging only.
 [[vectorize]]
