@@ -106,7 +106,7 @@ export async function handleDefense(
       created_at: Date.now(),
       updated_at: Date.now(),
     };
-    const investigation = await deepInvestigate(env, incident);
+    const investigation = await deepInvestigate(env, identity, incident);
     return json({
       ok: true,
       triage,

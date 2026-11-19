@@ -226,7 +226,7 @@ export class AgentNode {
     context: string,
     obs: string[]
   ) {
-    const r = await chat(this.env, [
+    const r = await chat(this.env, identity, [
       { role: "system", content: `Agente "${role}". Sintetiza veraz y conciso.` },
       {
         role: "user",
