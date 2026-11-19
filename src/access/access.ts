@@ -76,6 +76,7 @@ export async function upsertPolicy(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: policyId,
     transformation: "access.policy.upsert",
     pipeline_version: "v1",
