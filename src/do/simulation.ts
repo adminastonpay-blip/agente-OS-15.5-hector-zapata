@@ -163,6 +163,7 @@ Analiza impacto, riesgos y recomendación. Sé breve.`;
             .run()
             .catch(() => {});
           await emitLineage(this.env, {
+            tenant: identity.tenant,
             object_id: p.id,
             transformation: "simulation.commit",
             pipeline_version: "v1",
