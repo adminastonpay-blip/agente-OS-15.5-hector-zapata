@@ -101,6 +101,7 @@ export async function handleV21(
       }
 
       await emitLineage(env, {
+        tenant: identity.tenant,
         object_id: id,
         transformation: "rag_ingest",
         pipeline_version: "21.0",
@@ -214,7 +215,10 @@ export async function handleV21(
     const u = new URL(req.url);
     const objectId = u.searchParams.get("object_id") || "";
     if (!objectId) return json({ ok: false, error: "object_id required" }, 400);
-    const events = await getLineageTree(env, objectId);
+    if (!identity.tenant || !identity.tenant.trim()) {
+      return json({ ok: false, error: "tenant_required" }, 403);
+    }
+    const events = await getLineageTree(env, identity.tenant, objectId);
     return json({ ok: true, events, d1: !!env.DB });
   }
 
@@ -296,8 +300,6 @@ export async function handleV21(
   if (path === "/v1/pii/mask" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const text = String(body.text || "");
-    // Stable PII pseudonyms require a deployment-managed secret. Never fall
-    // back to a public constant, and never let request data raise clearance.
     const secret = env.PII_HMAC_SECRET;
     if (typeof secret !== "string" || new TextEncoder().encode(secret).byteLength < 32) {
       return json({ ok: false, error: "pii_hmac_secret_not_configured" }, 503);
