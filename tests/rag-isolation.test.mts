@@ -23,6 +23,27 @@ function aiMock() {
   };
 }
 
+// v21 routes embeddings and decisions through ControlGate + ModelRunner.
+// The mock must provide the same required bindings and both SafetyInterlock
+// operations (policy evaluation and the SQLite-backed rate-limit check).
+function inferenceEnv() {
+  const safetyStub = {
+    fetch: async (url: string | URL) => {
+      const path = new URL(String(url)).pathname;
+      if (path === "/rate-limit/check") return json({ allowed: true }, 200);
+      return json({ status: "allowed" }, 200);
+    },
+  };
+  return {
+    EMBED_MODEL: "@cf/baai/bge-m3",
+    CHAT_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8",
+    SAFETY: {
+      idFromName: (_name: string) => "mock-safety",
+      get: (_id: string) => safetyStub,
+    },
+  };
+}
+
 describe("RAG tenant isolation and request security — TDD Green Phase", () => {
   test("Tenant B must not retrieve Tenant A data; ingest and query must use tenant namespaces", async () => {
     const stored: any[] = [];
@@ -30,6 +51,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
     const persistedRows: any[] = [];
     const statusUpdates: any[] = [];
     const env: any = {
+      ...inferenceEnv(),
       AI: aiMock(),
       DB: {
         prepare: (sql: string) => ({
@@ -113,6 +135,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
   test("must mark the D1 document FAILED when Vectorize upsert fails", async () => {
     const statusUpdates: any[] = [];
     const env: any = {
+      ...inferenceEnv(),
       AI: aiMock(),
       DB: {
         prepare: (sql: string) => ({
@@ -151,6 +174,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
   test("must cap user-supplied topK at 20 before calling Vectorize", async () => {
     let receivedTopK: number | undefined;
     const env: any = {
+      ...inferenceEnv(),
       AI: aiMock(),
       VECTORIZE: {
         query: async (_vector: number[], options: any) => {
@@ -180,6 +204,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
 
   test("must return a server error when D1 document persistence fails during ingest", async () => {
     const env: any = {
+      ...inferenceEnv(),
       AI: aiMock(),
       DB: {
         prepare: (sql: string) => ({
@@ -236,6 +261,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
       fetch: async () => json({ status: "allowed" }, 200),
     };
     const env: any = {
+      ...inferenceEnv(),
       AI: aiMock(),
       SAFETY: {
         idFromName: (_name: string) => "tenant-B-safety",
