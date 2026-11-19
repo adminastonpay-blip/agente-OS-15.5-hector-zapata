@@ -1,4 +1,7 @@
-/** Additive skills for ASTON OS 15.5 — does not alter core chat contract */
+/** Additive skills for ASTON OS 15.5 — governed inference only */
+import type { Env, Identity } from "../types";
+import { ControlGate } from "../core/control-gate";
+import { ModelRunner } from "../core/model-runner";
 
 export const TTS_MODELS = [
   "@cf/deepgram/aura-2-es",
@@ -95,25 +98,32 @@ export async function normalizeAudio(result: unknown): Promise<ArrayBuffer | nul
   return null;
 }
 
-export async function runTts(env: { AI: Ai }, text: string, preferred?: string): Promise<{ binary: ArrayBuffer | null; model: string; raw?: unknown }> {
+export async function runTts(
+  env: Env,
+  identity: Identity,
+  text: string,
+  preferred?: string
+): Promise<{ binary: ArrayBuffer | null; model: string; raw?: unknown }> {
+  if (!identity || identity.method === "public" || !identity.actor?.trim() || !identity.tenant?.trim()) {
+    throw new Error("verified_inference_identity_required");
+  }
   const models = [preferred, ...TTS_MODELS].filter(Boolean) as string[];
   const seen = new Set<string>();
   let lastErr = "";
-  for (const m of models) {
-    if (seen.has(m)) continue;
-    seen.add(m);
-    try {
-      let result: any;
+  for (const model of models) {
+    if (seen.has(model)) continue;
+    seen.add(model);
+    for (const payload of [{ text }, { prompt: text }]) {
+      const gate = await new ControlGate(env).authorizeInference(identity, "tts", payload, model);
+      if (!gate.ok) throw new Error(gate.reason);
       try {
-        result = await env.AI.run(m as any, { text } as any);
-      } catch {
-        result = await env.AI.run(m as any, { prompt: text } as any);
+        const result = await new ModelRunner(env).execute<any>(gate.permit, "tts", model, payload);
+        const binary = await normalizeAudio(result);
+        if (binary) return { binary, model };
+        if (result) return { binary: null, model, raw: result };
+      } catch (error: any) {
+        lastErr = String(error?.message || error);
       }
-      const binary = await normalizeAudio(result);
-      if (binary) return { binary, model: m };
-      if (result) return { binary: null, model: m, raw: result };
-    } catch (e: any) {
-      lastErr = String(e?.message || e);
     }
   }
   throw new Error(lastErr || "TTS unavailable");
