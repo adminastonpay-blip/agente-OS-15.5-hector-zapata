@@ -115,6 +115,22 @@ export async function handleDefense(
     });
   }
 
+  if (path === "/v1/defense/incidents" && req.method === "GET") {
+    const items = await listIncidents(env, identity);
+    return json({
+      ok: true,
+      count: items.length,
+      incidents: items.map((i) => ({
+        id: i.id,
+        title: i.title,
+        severity: i.severity,
+        status: i.status,
+        created_at: i.created_at,
+        updated_at: i.updated_at,
+      })),
+    });
+  }
+
   // Human decision passthrough to SafetyInterlock
   if (path === "/v1/defense/approve" && req.method === "POST") {
     if (!env.SAFETY) return json({ ok: false, error: "SAFETY DO not bound" }, 503);
