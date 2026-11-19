@@ -1,4 +1,6 @@
-import type { Env } from "../types";
+import type { Env, Identity } from "../types";
+import { ControlGate } from "../core/control-gate";
+import { ModelRunner } from "../core/model-runner";
 
 const FALLBACK_MODELS = [
   "@cf/meta/llama-3.1-8b-instruct-fp8",
@@ -16,131 +18,57 @@ function extractText(out: any): string {
   return typeof c === "string" ? c.trim() : "";
 }
 
-export async function embed(env: Env, texts: string[]): Promise<number[][]> {
-  const ai = env.AI;
-  if (!ai) throw new Error("Workers AI binding not configured");
-  try {
-    const res = (await ai.run(
-      env.EMBED_MODEL as any,
-      { text: texts } as any,
-      env.AI_GATEWAY_ID ? ({ gateway: { id: env.AI_GATEWAY_ID } } as any) : undefined
-    )) as any;
-    return res?.data ?? [];
-  } catch {
-    const res = (await ai.run(env.EMBED_MODEL as any, { text: texts } as any)) as any;
-    return res?.data ?? [];
+/** Every embedding call requires the caller's independently verified identity. */
+export async function embed(env: Env, identity: Identity, texts: string[]): Promise<number[][]> {
+  if (!identity || identity.method === "public" || !identity.actor?.trim() || !identity.tenant?.trim()) {
+    throw new Error("verified_inference_identity_required");
   }
+  const model = env.EMBED_MODEL;
+  if (!model || !model.startsWith("@cf/")) throw new Error("embedding_model_not_configured");
+  const payload = { text: texts };
+  const gate = await new ControlGate(env).authorizeInference(identity, "embeddings", payload, model);
+  if (!gate.ok) throw new Error(gate.reason);
+  const result = await new ModelRunner(env).execute<any>(gate.permit, "embeddings", model, payload);
+  return result?.data ?? [];
 }
 
+/** Each fallback model receives a new model-bound, one-use permit. */
 export async function chat(
   env: Env,
+  identity: Identity,
   messages: any[],
   opts?: { max_tokens?: number; temp?: number }
 ): Promise<{ response: string; model: string }> {
-  const ai = env.AI;
-  if (!ai) throw new Error("Workers AI binding not configured");
+  if (!identity || identity.method === "public" || !identity.actor?.trim() || !identity.tenant?.trim()) {
+    throw new Error("verified_inference_identity_required");
+  }
   const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
   const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
   let lastErr = "";
-
   for (const model of models) {
-    const input = {
-      messages,
-      max_tokens: opts?.max_tokens ?? 512,
-      temperature: opts?.temp ?? 0.2,
-    } as any;
-
-    if (env.AI_GATEWAY_ID) {
-      try {
-        const out = (await ai.run(model as any, input, {
-          gateway: { id: env.AI_GATEWAY_ID },
-        } as any)) as any;
-        const text = extractText(out);
-        if (text) return { response: text, model };
-      } catch (e: any) {
-        lastErr = String(e?.message || e);
-      }
-    }
-
+    const gate = await new ControlGate(env).authorizeChat(identity, messages, model);
+    if (!gate.ok) throw new Error(gate.reason);
     try {
-      const out = (await ai.run(model as any, input)) as any;
-      const text = extractText(out);
-      if (text) return { response: text, model };
-    } catch (e: any) {
-      lastErr = String(e?.message || e);
+      const out = await new ModelRunner(env).runChat(gate.permit, messages, {
+        maxTokens: opts?.max_tokens ?? 512,
+        temperature: opts?.temp ?? 0.2,
+      }, model);
+      const response = extractText(out);
+      if (response) return { response, model };
+      lastErr = "model_runner_empty_response";
+    } catch (error: any) {
+      lastErr = String(error?.message || error);
     }
   }
-
   throw new Error(lastErr || "AI unavailable");
 }
 
-/**
- * Prefer native Workers AI stream; fall back to progressive SSE of full answer.
- */
+/** Streaming stays fail-closed until buffered output safety is implemented. */
 export async function chatStream(
-  env: Env,
-  messages: any[],
-  opts?: { max_tokens?: number; temp?: number }
-): Promise<{ stream: ReadableStream; model: string; mode: "native" | "chunked" }> {
-  const ai = env.AI;
-  if (!ai) throw new Error("Workers AI binding not configured");
-  const preferred = (env.CHAT_MODEL || FALLBACK_MODELS[0]) as string;
-  const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
-  const inputBase = {
-    messages,
-    max_tokens: opts?.max_tokens ?? 512,
-    temperature: opts?.temp ?? 0.2,
-    stream: true,
-  } as any;
-
-  for (const model of models) {
-    try {
-      let out: any;
-      if (env.AI_GATEWAY_ID) {
-        try {
-          out = await ai.run(model as any, inputBase, {
-            gateway: { id: env.AI_GATEWAY_ID },
-          } as any);
-        } catch {
-          out = await ai.run(model as any, inputBase);
-        }
-      } else {
-        out = await ai.run(model as any, inputBase);
-      }
-
-      if (out && typeof out.getReader === "function") {
-        return { stream: out as ReadableStream, model, mode: "native" };
-      }
-      if (out?.body && typeof out.body.getReader === "function") {
-        return { stream: out.body as ReadableStream, model, mode: "native" };
-      }
-    } catch {
-      /* try next model or fallback */
-    }
-  }
-
-  // Fallback: full completion, then emit as SSE-friendly text chunks
-  const full = await chat(env, messages, opts);
-  const text = full.response || "";
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const size = 24;
-      for (let i = 0; i < text.length; i += size) {
-        controller.enqueue(encoder.encode(text.slice(i, i + size)));
-        await new Promise((r) => setTimeout(r, 12));
-      }
-      controller.close();
-    },
-  });
-  return { stream, model: full.model, mode: "chunked" };
-}
-
-export function chunk(text: string, size = 800, overlap = 100): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < text.length; i += size - overlap) {
-    out.push(text.slice(i, i + size));
-    if (i + size >= text.length) break;
-  }
-  return out;
+  _env: Env,
+  _identity: Identity,
+  _messages: any[],
+  _opts?: { max_tokens?: number; temp?: number }
+): Promise<never> {
+  throw new Error("chat_stream_disabled_until_buffered_safety_guard_is_implemented");
 }
