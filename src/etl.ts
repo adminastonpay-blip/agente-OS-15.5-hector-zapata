@@ -9,8 +9,10 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
       const vectorize = env.VECTORIZE;
       if (!db || !vectorize) throw new Error("ETL requires DB and VECTORIZE bindings");
       const job = msg.body as any;
+      if (!job || typeof job.tenant !== "string" || !job.tenant.trim()) throw new Error("ETL job tenant required");
       const rawId = `raw_${crypto.randomUUID()}`;
       await emitLineage(env, {
+        tenant: job.tenant,
         object_id: rawId, transformation: `etl.${job.kind}.received`,
         pipeline_version: "v1", actor: job.actor,
         metadata: { source: job.source, len: job.text.length },
@@ -29,6 +31,7 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
           "INSERT OR REPLACE INTO documents (id, source, chunk, created_at) VALUES (?, ?, ?, ?)"
         ).bind(u.id, u.metadata.source, u.metadata.chunk, Date.now()).run();
         await emitLineage(env, {
+          tenant: job.tenant,
           object_id: u.id, parent_ids: [rawId], transformation: "etl.chunk.embed",
           pipeline_version: "v1", model: env.EMBED_MODEL, actor: job.actor,
           metadata: { source: job.source },
@@ -40,6 +43,9 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
 }
 
 export async function handleCron(env: Env) {
+  // The current documents schema has no authoritative tenant column. Do not re-embed
+  // or emit tenantless lineage for a cross-tenant cron scan; enable after a tenant-scoped migration.
+  throw new Error("cron ETL disabled until documents have authoritative tenant ownership");
   const db = env.DB;
   const vectorize = env.VECTORIZE;
   if (!db || !vectorize) throw new Error("Cron ETL requires DB and VECTORIZE bindings");
