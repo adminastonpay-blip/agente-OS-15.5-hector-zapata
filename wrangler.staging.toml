@@ -25,7 +25,8 @@ max_batch_size = 5
 max_batch_timeout = 5
 max_retries = 3
 max_concurrency = 1
-\n# Dedicated D1 database for isolated RAG staging only.
+
+# Dedicated D1 database for isolated RAG staging only.
 [[d1_databases]]
 binding = "DB"
 database_name = "aston-rag-staging-db"
