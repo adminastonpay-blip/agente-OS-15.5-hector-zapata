@@ -249,8 +249,16 @@ export async function handleV21(
   if (path === "/v1/pii/mask" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const text = String(body.text || "");
-    const secret = env.PII_HMAC_SECRET || "aston-edge-default-pii";
-    const { masked } = await maskForAgent(text, body.clearance || identity.clearance, secret);
+    // Never derive stable PII tokens from a public, hard-coded fallback key.
+    // A missing or undersized secret must fail closed before tokenization.
+    if (typeof env.PII_HMAC_SECRET !== "string" || env.PII_HMAC_SECRET.length < 32) {
+      return json({ ok: false, error: "pii_hmac_secret_not_configured" }, 503);
+    }
+    const { masked } = await maskForAgent(
+      text,
+      body.clearance || identity.clearance,
+      env.PII_HMAC_SECRET
+    );
     return json({ ok: true, masked });
   }
 
