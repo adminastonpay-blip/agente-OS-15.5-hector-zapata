@@ -60,9 +60,9 @@ export async function handleV21(
       ids.push(id);
       try {
         await env.DB.prepare(
-          `INSERT INTO documents (id, tenant, source, chunk, created_at) VALUES (?, ?, ?, ?, ?)`
+          `INSERT INTO documents (id, tenant, source, chunk, created_at, index_status) VALUES (?, ?, ?, ?, ?, ?)`
         )
-          .bind(id, namespace, source, part, Date.now())
+          .bind(id, namespace, source, part, Date.now(), "PENDING_VECTOR")
           .run();
       } catch (error) {
         console.error("[RAG_D1_PERSISTENCE_FAILED]", error);
@@ -76,13 +76,30 @@ export async function handleV21(
             id,
             values: vec,
             namespace,
-            metadata: { source, chunk: part.slice(0, 500) },
+            metadata: { source, text: part, tenant: namespace },
           },
         ] as any);
       } catch (error: any) {
         console.error("[RAG_VECTORIZE_UPSERT_FAILED]", error?.message || error);
-        return json({ ok: false, error: "Vector persistence failed" }, 502);
+        try {
+          await env.DB.prepare(
+            "UPDATE documents SET index_status = ? WHERE id = ? AND tenant = ?"
+          ).bind("FAILED", id, namespace).run();
+        } catch (statusError) {
+          console.error("[RAG_INDEX_STATUS_FAILED]", statusError);
+        }
+        return json({ ok: false, error: "Vector persistence failed", index_status: "FAILED" }, 502);
       }
+
+      try {
+        await env.DB.prepare(
+          "UPDATE documents SET index_status = ? WHERE id = ? AND tenant = ?"
+        ).bind("INDEXED", id, namespace).run();
+      } catch (statusError) {
+        console.error("[RAG_INDEX_STATUS_FAILED]", statusError);
+        return json({ ok: false, error: "Index status update failed", index_status: "PENDING_VECTOR" }, 500);
+      }
+
       await emitLineage(env, {
         object_id: id,
         transformation: "rag_ingest",
@@ -117,6 +134,7 @@ export async function handleV21(
         topK,
         returnMetadata: "all",
         namespace,
+        filter: { tenant: { $eq: namespace } },
       } as any);
       return json({ ok: true, matches: m.matches ?? [] });
     } catch (e: any) {
@@ -342,6 +360,7 @@ export async function handleV21(
           topK: 3,
           returnMetadata: "all",
           namespace,
+          filter: { tenant: { $eq: namespace } },
         } as any);
         context = (m.matches ?? [])
           .map((x: any) => x.metadata?.chunk)
