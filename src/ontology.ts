@@ -29,6 +29,7 @@ export async function createObject(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: oid,
     transformation: "create_object",
     pipeline_version: "v1",
@@ -123,6 +124,7 @@ export async function createLink(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: lid,
     parent_ids: [l.from_id, l.to_id],
     transformation: "create_link",
