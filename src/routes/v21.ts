@@ -65,6 +65,7 @@ export async function handleV21(
         }
       }
       await emitLineage(env, {
+        tenant: identity.tenant,
         object_id: id,
         transformation: "rag_ingest",
         pipeline_version: "21.0",
@@ -167,7 +168,10 @@ export async function handleV21(
     const u = new URL(req.url);
     const objectId = u.searchParams.get("object_id") || "";
     if (!objectId) return json({ ok: false, error: "object_id required" }, 400);
-    const events = await getLineageTree(env, objectId);
+    if (!identity.tenant || !identity.tenant.trim()) {
+      return json({ ok: false, error: "tenant_required" }, 403);
+    }
+    const events = await getLineageTree(env, identity.tenant, objectId);
     return json({ ok: true, events, d1: !!env.DB });
   }
 
