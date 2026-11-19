@@ -58,6 +58,7 @@ export async function handleCron(env: Env) {
     await vectorize.upsert([{ id: d.id, values: v,
       metadata: { source: d.source, chunk: d.chunk.slice(0, 500) } }] as any);
     await emitLineage(env, {
+      tenant: d.tenant,
       object_id: d.id, transformation: "cron.reembed",
       pipeline_version: "v1", model: env.EMBED_MODEL, actor: "cron",
     });
