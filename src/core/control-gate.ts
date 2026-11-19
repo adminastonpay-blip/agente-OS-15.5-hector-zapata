@@ -310,7 +310,12 @@ export function consumeInferencePermit(
 ): boolean {
   if (!permit || typeof permit !== "object") return false;
   const issued = issuedPermits.get(permit as object);
-  if (!issued || issued.action !== action || issued.payload !== payload || issued.model !== model) {
+  if (!issued) return false;
+  if (issued.expiresAt <= Date.now()) {
+    issuedPermits.delete(permit as object);
+    return false;
+  }
+  if (issued.action !== action || issued.payload !== payload || issued.model !== model) {
     return false;
   }
   issuedPermits.delete(permit as object);
