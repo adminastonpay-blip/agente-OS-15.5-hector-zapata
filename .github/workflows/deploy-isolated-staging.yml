@@ -47,6 +47,7 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::Missing CLOUDFLARE_API_TOKEN"; exit 1; }
           test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "::error::Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test "$CLOUDFLARE_ACCOUNT_ID" = "70e8821e0eeeccb401d9ba0b3f4dbfe8" || { echo "::error::CLOUDFLARE_ACCOUNT_ID must target the verified primary account"; exit 1; }
           test -n "$AUDIT_SECRET" || { echo "::error::Missing AUDIT_SECRET"; exit 1; }
           test "${#AUDIT_SECRET}" -ge 32 || { echo "::error::AUDIT_SECRET must contain at least 32 characters"; exit 1; }
 
@@ -58,6 +59,12 @@ jobs:
 
       - name: Security regression tests
         run: npm run test:security
+
+      - name: Apply staging D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply aston-rag-staging-db --remote --config wrangler.staging.toml
 
       - name: Staging configuration dry run
         env:
