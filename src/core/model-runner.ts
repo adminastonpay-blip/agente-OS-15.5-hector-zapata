@@ -48,10 +48,11 @@ export class ModelRunner {
     permit: InferencePermit,
     action: "recovery_diagnosis",
     content: string,
-    options: { maxTokens?: number; temperature?: number } = {}
+    options: { maxTokens?: number; temperature?: number } = {},
+    modelOverride?: string
   ): Promise<ChatInferenceResult> {
     const ai = this.env.AI;
-    const model = this.env.CHAT_MODEL;
+    const model = modelOverride || this.env.CHAT_MODEL;
     if (!ai || !model || !model.startsWith("@cf/")) {
       throw new Error("model_runner_not_configured");
     }
