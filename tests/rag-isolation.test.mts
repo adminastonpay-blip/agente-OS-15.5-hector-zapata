@@ -258,7 +258,12 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
   test("Tenant B /v1/decide must query Vectorize with a mandatory tenant namespace", async () => {
     const queryCalls: any[] = [];
     const safetyStub = {
-      fetch: async () => json({ status: "allowed" }, 200),
+      fetch: async (url: string | URL) => {
+        const path = new URL(String(url)).pathname;
+        return path === "/rate-limit/check"
+          ? json({ allowed: true }, 200)
+          : json({ status: "allowed" }, 200);
+      },
     };
     const env: any = {
       ...inferenceEnv(),
