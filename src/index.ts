@@ -216,7 +216,7 @@ async function handleChatStream(_req: Request, _env: Env): Promise<Response> {
   }, 503);
 }
 
-async function handleTts(req: Request, env: Env): Promise<Response> {
+async function handleTts(req: Request, env: Env, identity: Awaited<ReturnType<typeof resolveIdentity>>): Promise<Response> {
   try {
     if (!env.AI) return json({ ok: false, error: "AI binding not configured" }, 503);
     const body = await req.json<any>().catch(() => ({}));
@@ -232,7 +232,7 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
         : lang.startsWith("en")
           ? "@cf/deepgram/aura-2-en"
           : "@cf/deepgram/aura-2-es";
-    const { binary, model, raw } = await runTts(env as Env & { AI: Ai }, text, preferred);
+    const { binary, model, raw } = await runTts(env, identity, text, preferred);
     if (binary) {
       return new Response(binary, {
         status: 200,
@@ -248,7 +248,7 @@ async function handleTts(req: Request, env: Env): Promise<Response> {
   }
 }
 
-async function handleVoice(req: Request, env: Env): Promise<Response> {
+async function handleVoice(req: Request, env: Env, identity: Awaited<ReturnType<typeof resolveIdentity>>): Promise<Response> {
   try {
     if (!env.AI) return json({ ok: false, error: "AI binding not configured" }, 503);
     const body = await req.json<any>().catch(() => ({}));
@@ -262,7 +262,7 @@ async function handleVoice(req: Request, env: Env): Promise<Response> {
     const spoken = applyVoicePersonality(text, profile.pace);
     const preferred =
       typeof body.model === "string" && body.model.startsWith("@cf/") ? body.model : profile.model;
-    const { binary, model, raw } = await runTts(env as Env & { AI: Ai }, spoken, preferred);
+    const { binary, model, raw } = await runTts(env, identity, spoken, preferred);
     if (binary && body.format !== "json") {
       return new Response(binary, {
         status: 200,
@@ -467,8 +467,8 @@ export default {
       return handleChatStream(req, env);
     }
     if (path === "/v1/solve" && req.method === "POST") return handleChat(req, env, true);
-    if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env);
-    if (path === "/v1/voice" && req.method === "POST") return handleVoice(req, env);
+    if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env, identity);
+    if (path === "/v1/voice" && req.method === "POST") return handleVoice(req, env, identity);
     if (path === "/v1/voice/profiles" && req.method === "GET") {
       return json({
         ok: true,
