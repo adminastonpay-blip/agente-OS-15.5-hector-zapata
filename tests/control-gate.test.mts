@@ -192,3 +192,32 @@ test("10. embeddings and TTS fail closed without a verified tenant identity", as
   assert.equal(calls.ai, 0);
   assert.equal(calls.evaluate, 0);
 });
+
+
+test("11. chat fallback model is explicitly bound to its one-use permit", async () => {
+  const { env, calls } = makeEnv();
+  const fallbackModel = "@cf/meta/llama-3.1-8b-instruct-fast";
+  const result = await new ControlGate(env).authorizeChat(identity, messages, fallbackModel);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const output = await new ModelRunner(env).runChat(
+    result.permit, messages, { maxTokens: 128 }, fallbackModel, false,
+  );
+  assert.equal(output.model, fallbackModel);
+  assert.equal(calls.ai, 1);
+});
+
+test("12. direct retry requires a newly authorized permit", async () => {
+  const { env, calls } = makeEnv();
+  const gate = new ControlGate(env);
+  const first = await gate.authorizeInference(identity, "embeddings", { text: ["x"] }, "@cf/baai/bge-m3");
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  const runner = new ModelRunner(env);
+  await runner.execute(first.permit, "embeddings", "@cf/baai/bge-m3", { text: ["x"] }, true);
+  const second = await gate.authorizeInference(identity, "embeddings", { text: ["x"] }, "@cf/baai/bge-m3");
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  await runner.execute(second.permit, "embeddings", "@cf/baai/bge-m3", { text: ["x"] }, false);
+  assert.equal(calls.ai, 2);
+});
