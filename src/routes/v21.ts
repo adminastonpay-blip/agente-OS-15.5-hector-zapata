@@ -7,8 +7,6 @@ import { createObjectType, createObject, createLink, cascadeImpact } from "../on
 import { emitLineage, getLineageTree } from "../lineage";
 import { maskForAgent } from "../pii";
 import { embed, chat, chunk } from "../lib/ai";
-import { ControlGate } from "../core/control-gate";
-import { ModelRunner } from "../core/model-runner";
 
 // Vectorize namespaces are limited to 64 UTF-8 bytes. Derive only from
 // the authenticated identity; never accept a namespace from the request body.
