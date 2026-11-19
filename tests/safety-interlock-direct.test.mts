@@ -19,6 +19,9 @@ class FakeSqlStorage {
       const tenant = String(args[0]);
       const last = this.audit.filter((r) => r.tenant === tenant).at(-1);
       rows = last ? [{ event_hash: last.event_hash }] : [];
+    } else if (q.startsWith("SELECT record_json, previous_hash, event_hash FROM audit_events")) {
+      const tenant = String(args[0]);
+      rows = this.audit.filter((r) => r.tenant === tenant).map((r) => ({ record_json: r.record_json, previous_hash: r.previous_hash, event_hash: r.event_hash }));
     } else if (q.startsWith("INSERT INTO audit_events")) {
       const [ts, tenant, actor, event_type, record_json, previous_hash, event_hash] = args;
       this.audit.push({ ts, tenant, actor, event_type, record_json, previous_hash, event_hash });
