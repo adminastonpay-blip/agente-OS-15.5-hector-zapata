@@ -46,20 +46,24 @@ export async function chat(
   const models = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
   let lastErr = "";
   for (const model of models) {
-    const gate = await new ControlGate(env).authorizeChat(identity, messages, model);
-    if (!gate.ok) throw new Error(gate.reason);
-    try {
-      const out = await new ModelRunner(env).runChat(gate.permit, messages, {
-        maxTokens: opts?.max_tokens ?? 512,
-        temperature: opts?.temp ?? 0.2,
-      }, model);
-      const response = extractText(out);
-      if (response) return { response, model };
-      lastErr = "model_runner_empty_response";
-    } catch (error: any) {
-      lastErr = String(error?.message || error);
+    const attempts = env.AI_GATEWAY_ID ? [true, false] : [false];
+    for (const useGateway of attempts) {
+      const gate = await new ControlGate(env).authorizeChat(identity, messages, model);
+      if (!gate.ok) throw new Error(gate.reason);
+      try {
+        const out = await new ModelRunner(env).runChat(gate.permit, messages, {
+          maxTokens: opts?.max_tokens ?? 512,
+          temperature: opts?.temp ?? 0.2,
+        }, model, useGateway);
+        const response = extractText(out);
+        if (response) return { response, model };
+        lastErr = "model_runner_empty_response";
+      } catch (error: any) {
+        lastErr = String(error?.message || error);
+      }
     }
   }
+
   throw new Error(lastErr || "AI unavailable");
 }
 
