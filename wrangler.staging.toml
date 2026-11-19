@@ -12,6 +12,11 @@ workers_dev = true # isolated workers.dev endpoint; staging route guard limits e
 [ai]
 binding = "AI"
 
+# Dedicated Vectorize index for isolated RAG staging only.
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "aston-rag-staging-index"
+
 [[durable_objects.bindings]]
 name = "SAFETY"
 class_name = "SafetyInterlock"
