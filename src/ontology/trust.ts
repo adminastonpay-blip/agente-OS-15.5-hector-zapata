@@ -54,6 +54,7 @@ export async function registerSchema(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: typeId,
     transformation: "ontology.schema.register",
     pipeline_version: "v1",
@@ -167,6 +168,7 @@ export async function quarantineObject(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: qid,
     transformation: "ontology.object.quarantined",
     pipeline_version: "v1",
