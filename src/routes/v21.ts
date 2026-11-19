@@ -363,7 +363,7 @@ export async function handleV21(
           filter: { tenant: { $eq: namespace } },
         } as any);
         context = (m.matches ?? [])
-          .map((x: any) => x.metadata?.chunk)
+          .map((x: any) => x.metadata?.text)
           .filter(Boolean)
           .join("\n---\n");
       } catch {
