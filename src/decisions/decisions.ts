@@ -61,6 +61,7 @@ export async function createDecision(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: decisionId,
     transformation: "decision.created",
     pipeline_version: "v1",
@@ -170,6 +171,7 @@ export async function addEvidence(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: decisionId,
     parent_ids: [input.reference_id],
     transformation: "decision.evidence.added",
@@ -213,6 +215,7 @@ export async function decideDecision(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: decisionId,
     transformation: input.approve ? "decision.approved" : "decision.rejected",
     pipeline_version: "v1",
@@ -265,6 +268,7 @@ export async function recordOutcome(
     .run();
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: decisionId,
     transformation: "decision.outcome.recorded",
     pipeline_version: "v1",
