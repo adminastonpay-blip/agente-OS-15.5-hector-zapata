@@ -2,6 +2,13 @@ import type { Env } from "./types";
 import { emitLineage } from "./lineage";
 import { embed, chunk } from "./lib/ai";
 
+function requireTenant(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || new TextEncoder().encode(value).byteLength > 64) {
+    throw new Error("ETL job requires a valid tenant from the trusted queue producer");
+  }
+  return value.trim();
+}
+
 export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
   for (const msg of batch.messages) {
     try {
@@ -9,33 +16,48 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
       const vectorize = env.VECTORIZE;
       if (!db || !vectorize) throw new Error("ETL requires DB and VECTORIZE bindings");
       const job = msg.body as any;
+      const tenant = requireTenant(job?.tenant);
+      if (typeof job.text !== "string" || !job.text.trim()) throw new Error("ETL text required");
+      const source = String(job.source || "queue").slice(0, 200);
+      const actor = typeof job.actor === "string" ? job.actor : "trusted-queue";
       const rawId = `raw_${crypto.randomUUID()}`;
       await emitLineage(env, {
-        object_id: rawId, transformation: `etl.${job.kind}.received`,
-        pipeline_version: "v1", actor: job.actor,
-        metadata: { source: job.source, len: job.text.length },
+        tenant,
+        object_id: rawId,
+        transformation: `etl.${String(job.kind || "ingest")}.received`,
+        pipeline_version: "v1",
+        actor,
+        metadata: { source, len: job.text.length },
       });
       const normalized = job.text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
       const chunks = chunk(normalized);
       const vectors = await embed(env, chunks);
-      const upserts = chunks.map((c, i) => ({
-        id: `${job.source}#${i}-${crypto.randomUUID().slice(0, 8)}`,
+      const upserts = chunks.map((value, i) => ({
+        id: `${source}#${i}-${crypto.randomUUID().slice(0, 8)}`,
         values: vectors[i],
-        metadata: { source: job.source, chunk: c.slice(0, 500), tenant: job.tenant },
+        namespace: tenant,
+        metadata: { source, text: value.slice(0, 500), tenant },
       }));
       await vectorize.upsert(upserts as any);
-      for (const u of upserts) {
+      for (const item of upserts) {
         await db.prepare(
-          "INSERT OR REPLACE INTO documents (id, source, chunk, created_at) VALUES (?, ?, ?, ?)"
-        ).bind(u.id, u.metadata.source, u.metadata.chunk, Date.now()).run();
+          "INSERT OR REPLACE INTO documents (id, source, chunk, created_at, tenant, index_status) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind(item.id, source, item.metadata.text, Date.now(), tenant, "INDEXED").run();
         await emitLineage(env, {
-          object_id: u.id, parent_ids: [rawId], transformation: "etl.chunk.embed",
-          pipeline_version: "v1", model: env.EMBED_MODEL, actor: job.actor,
-          metadata: { source: job.source },
+          tenant,
+          object_id: item.id,
+          parent_ids: [rawId],
+          transformation: "etl.chunk.embed",
+          pipeline_version: "v1",
+          model: env.EMBED_MODEL,
+          actor,
+          metadata: { source },
         });
       }
       msg.ack();
-    } catch { msg.retry(); }
+    } catch {
+      msg.retry();
+    }
   }
 }
 
@@ -44,16 +66,27 @@ export async function handleCron(env: Env) {
   const vectorize = env.VECTORIZE;
   if (!db || !vectorize) throw new Error("Cron ETL requires DB and VECTORIZE bindings");
   const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  // Legacy rows without an authoritative tenant are intentionally excluded.
   const stale = await db.prepare(
-    `SELECT id, source, chunk FROM documents WHERE created_at < ? LIMIT 50`
+    `SELECT id, source, chunk, tenant FROM documents
+     WHERE created_at < ? AND tenant IS NOT NULL AND tenant != '' LIMIT 50`
   ).bind(cutoff).all();
-  for (const d of stale.results as any[]) {
-    const [v] = await embed(env, [d.chunk]);
-    await vectorize.upsert([{ id: d.id, values: v,
-      metadata: { source: d.source, chunk: d.chunk.slice(0, 500) } }] as any);
+  for (const row of stale.results as any[]) {
+    const tenant = requireTenant(row.tenant);
+    const [vector] = await embed(env, [row.chunk]);
+    await vectorize.upsert([{
+      id: row.id,
+      values: vector,
+      namespace: tenant,
+      metadata: { source: row.source, text: String(row.chunk).slice(0, 500), tenant },
+    }] as any);
     await emitLineage(env, {
-      object_id: d.id, transformation: "cron.reembed",
-      pipeline_version: "v1", model: env.EMBED_MODEL, actor: "cron",
+      tenant,
+      object_id: row.id,
+      transformation: "cron.reembed",
+      pipeline_version: "v1",
+      model: env.EMBED_MODEL,
+      actor: "cron",
     });
   }
 }
