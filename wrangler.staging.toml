@@ -4,6 +4,7 @@
 # It uses only dedicated staging D1, Vectorize, and the isolated Preview queue.
 # R2 anchoring is disabled until the staging bucket is provisioned and verified.
 name = "aston-os-21x-audit-staging"
+account_id = "70e8821e0eeeccb401d9ba0b3f4dbfe8"
 main = "src/index.ts"
 compatibility_date = "2026-11-03"
 compatibility_flags = ["nodejs_compat"]
