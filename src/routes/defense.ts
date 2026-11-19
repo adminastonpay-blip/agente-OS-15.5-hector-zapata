@@ -115,22 +115,6 @@ export async function handleDefense(
     });
   }
 
-  if (path === "/v1/defense/incidents" && req.method === "GET") {
-    const items = await listIncidents(env, identity);
-    return json({
-      ok: true,
-      count: items.length,
-      incidents: items.map((i) => ({
-        id: i.id,
-        title: i.title,
-        severity: i.severity,
-        status: i.status,
-        created_at: i.created_at,
-        updated_at: i.updated_at,
-      })),
-    });
-  }
-
   // Human decision passthrough to SafetyInterlock
   if (path === "/v1/defense/approve" && req.method === "POST") {
     if (!env.SAFETY) return json({ ok: false, error: "SAFETY DO not bound" }, 503);
@@ -138,7 +122,8 @@ export async function handleDefense(
     const approval_id = String(body.approval_id || "");
     if (!approval_id) return json({ ok: false, error: "approval_id required" }, 400);
     const approved = body.approved !== false;
-    const operator = String(body.operator || identity.actor || "operator");
+    // The actor must come from the authenticated identity, never caller-controlled JSON.
+    const operator = identity.actor;
     const stub = env.SAFETY.get(env.SAFETY.idFromName(tenantKeySafe(identity)));
     const res = await stub.fetch("https://do/decide", {
       method: "POST",
