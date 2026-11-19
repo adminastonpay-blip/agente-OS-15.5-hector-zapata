@@ -6,7 +6,8 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
 
 export type InferenceScope = "chat" | "embeddings" | "tts" | "recovery_diagnosis";
 
-const issuedPermits = new WeakMap<object, { action: InferenceScope; payload: string; model: string }>();
+const INFERENCE_PERMIT_TTL_MS = 60_000;
+const issuedPermits = new WeakMap<object, { action: InferenceScope; payload: string; model: string; expiresAt: number }>();
 
 declare const permitBrand: unique symbol;
 export interface InferencePermit {
@@ -128,7 +129,7 @@ export class ControlGate {
         return { ok: false, status: 503, reason: "approved_recovery_model_not_configured" };
       }
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "recovery_diagnosis", payload: actionContent, model });
+      issuedPermits.set(permit, { action: "recovery_diagnosis", payload: actionContent, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
@@ -202,7 +203,7 @@ export class ControlGate {
           reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded" };
       }
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action, payload: serialized, model });
+      issuedPermits.set(permit, { action, payload: serialized, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
@@ -287,7 +288,7 @@ export class ControlGate {
       }
 
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "chat", payload, model });
+      issuedPermits.set(permit, { action: "chat", payload, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
