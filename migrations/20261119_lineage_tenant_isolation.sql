@@ -5,3 +5,10 @@ ALTER TABLE lineage_events ADD COLUMN tenant TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_lin_tenant_obj_ts
   ON lineage_events(tenant, object_id, ts DESC);
+
+-- Add explicit tenant ownership to RAG documents.
+-- Existing rows remain tenant='' and are excluded from tenant-scoped re-embedding.
+ALTER TABLE documents ADD COLUMN tenant TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_documents_tenant_created
+  ON documents(tenant, created_at);
