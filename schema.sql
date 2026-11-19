@@ -1,7 +1,8 @@
 -- ===== Pilar: Semántica / RAG =====
 CREATE TABLE IF NOT EXISTS documents (
-  id TEXT PRIMARY KEY, source TEXT, chunk TEXT, created_at INTEGER
+  id TEXT PRIMARY KEY, source TEXT, chunk TEXT, created_at INTEGER, tenant TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_documents_tenant_created ON documents(tenant, created_at);
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
   role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL
