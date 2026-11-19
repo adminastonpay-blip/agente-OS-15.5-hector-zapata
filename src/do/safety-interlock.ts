@@ -328,6 +328,7 @@ export class SafetyInterlock {
     });
 
     await emitLineage(this.env, {
+      tenant: identity.tenant,
       object_id: `safety_${crypto.randomUUID()}`,
       transformation: `safety.${policy.decision}`,
       pipeline_version: "v15.5",
@@ -417,6 +418,7 @@ export class SafetyInterlock {
     });
 
     await emitLineage(this.env, {
+      tenant: originalIdentity.tenant,
       object_id: approvalId,
       transformation: `safety.human_${newStatus}`,
       pipeline_version: "v15.5",
