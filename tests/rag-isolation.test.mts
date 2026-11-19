@@ -28,6 +28,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
     const stored: any[] = [];
     const queryCalls: any[] = [];
     const persistedRows: any[] = [];
+    const statusUpdates: any[] = [];
     const env: any = {
       AI: aiMock(),
       DB: {
@@ -35,6 +36,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
           bind: (...args: unknown[]) => ({
             run: async () => {
               if (sql.includes("INSERT INTO documents")) persistedRows.push({ sql, args });
+              if (sql.includes("UPDATE documents")) statusUpdates.push({ sql, args });
               return { success: true };
             },
           }),
@@ -50,6 +52,7 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
           const namespace = options?.namespace;
           const matches = stored
             .filter((item) => !namespace || item.namespace === namespace)
+            .filter((item) => !options?.filter?.tenant?.$eq || item.metadata?.tenant === options.filter.tenant.$eq)
             .map((item) => ({ id: item.id, metadata: item.metadata, namespace: item.namespace }));
           return { matches };
         },
@@ -86,19 +89,63 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
     const payload = await query.json() as any;
 
     const violations: string[] = [];
-    if (stored.some((item) => item.namespace !== "tenant-A" || "tenant" in (item.metadata ?? {}))) {
-      violations.push("ingest did not persist tenant-A namespace or still stores tenant as metadata");
+    if (stored.some((item) => item.namespace !== "tenant-A" || item.metadata?.tenant !== "tenant-A" || typeof item.metadata?.text !== "string")) {
+      violations.push("ingest did not persist tenant-A namespace and tenant metadata with chunk text");
     }
-    if (persistedRows.length === 0 || persistedRows.some((row) => !row.sql.includes("(id, tenant, source, chunk, created_at)") || row.args[1] !== "tenant-A")) {
+    if (persistedRows.length === 0 || persistedRows.some((row) => !row.sql.includes("(id, tenant, source, chunk, created_at, index_status)") || row.args[1] !== "tenant-A" || row.args[5] !== "PENDING_VECTOR")) {
       violations.push("D1 document record was not persisted with the authenticated tenant");
     }
     if (queryCalls[0]?.namespace !== "tenant-B") {
       violations.push("query did not send Vectorize namespace=tenant-B");
     }
+    if (queryCalls[0]?.filter?.tenant?.$eq !== "tenant-B") {
+      violations.push("query did not send mandatory tenant metadata filter");
+    }
+    if (!statusUpdates.some((row) => row.args[0] === "INDEXED" && row.args[2] === "tenant-A")) {
+      violations.push("D1 document status was not advanced to INDEXED after successful upsert");
+    }
     if ((payload.matches ?? []).some((match: any) => tenantADocumentIds.has(match.id))) {
       violations.push("Tenant B received a document ID created by Tenant A");
     }
     assert.deepEqual(violations, [], violations.join("; "));
+  });
+
+  test("must mark the D1 document FAILED when Vectorize upsert fails", async () => {
+    const statusUpdates: any[] = [];
+    const env: any = {
+      AI: aiMock(),
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            run: async () => {
+              if (sql.includes("UPDATE documents")) statusUpdates.push({ sql, args });
+              return { success: true };
+            },
+          }),
+        }),
+      },
+      VECTORIZE: {
+        upsert: async () => { throw new Error("Vectorize unavailable"); },
+      },
+    };
+
+    const response = await handleV21(
+      "/v1/rag/ingest",
+      new Request("https://aston.test/v1/rag/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "documento de prueba" }),
+      }),
+      env,
+      identity("tenant-A"),
+      json
+    );
+
+    assert.ok(response);
+    assert.equal(response.status, 502);
+    assert.ok(statusUpdates.some((row) => row.args[0] === "FAILED" && row.args[2] === "tenant-A"));
+    const payload = await response.json() as any;
+    assert.equal(payload.index_status, "FAILED");
   });
 
   test("must cap user-supplied topK at 20 before calling Vectorize", async () => {
@@ -220,6 +267,11 @@ describe("RAG tenant isolation and request security — TDD Green Phase", () => 
       queryCalls[0]?.namespace,
       "tenant-B",
       "La ruta /v1/decide consultó Vectorize sin el namespace obligatorio del tenant"
+    );
+    assert.deepEqual(
+      queryCalls[0]?.filter,
+      { tenant: { $eq: "tenant-B" } },
+      "La ruta /v1/decide consultó Vectorize sin el filtro obligatorio de metadata tenant"
     );
   });
 });
