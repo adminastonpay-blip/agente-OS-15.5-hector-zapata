@@ -124,7 +124,7 @@ export class ControlGate {
           reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded",
         };
       }
-      const model = this.env.CHAT_MODEL;
+      const model = modelOverride || this.env.CHAT_MODEL;
       if (!model || !model.startsWith("@cf/")) {
         return { ok: false, status: 503, reason: "approved_recovery_model_not_configured" };
       }
@@ -210,7 +210,7 @@ export class ControlGate {
     }
   }
 
-  async authorizeChat(identity: Identity, messages: ChatMessage[]): Promise<GateResult> {
+  async authorizeChat(identity: Identity, messages: ChatMessage[], modelOverride?: string): Promise<GateResult> {
     if (
       !identity ||
       identity.method === "public" ||
