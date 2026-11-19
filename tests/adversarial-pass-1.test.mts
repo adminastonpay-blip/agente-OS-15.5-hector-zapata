@@ -158,6 +158,10 @@ test("INTERLOCK-STATUS-001 / unexpected successful response must not invoke a to
   trace.push({ phase: "route-response", status: String(response.status), branch: counters.tool ? "tool-executed" : "tool-blocked" });
   t.diagnostic(JSON.stringify({ policy: "fixture-unknown for search; explicit allow for plan and synthesis", context: { tenant: identity.tenant, actor: identity.actor, tool: "search" }, trace, counters }));
   assert.equal(counters.tool, 0, "unknown status must fail closed");
+  const body = await response.json() as any;
+  assert.equal(body.status, "partial_denied");
+  assert.equal(body.blocked?.[0]?.status, "denied");
+  assert.match(body.blocked?.[0]?.policy?.reasons?.join(" ") ?? "", /decision status invalid/i);
 });
 
 test("INTERLOCK-UNAVAILABLE-001 / absent or empty response denies without invoking a tool", async (t) => {
@@ -214,4 +218,44 @@ test("INTERLOCK-UNAVAILABLE-001 / incompatible response contract must deny", asy
   trace.push({ phase: "route-response", status: String(response.status), branch: counters.tool ? "tool-executed" : "tool-blocked" });
   t.diagnostic(JSON.stringify({ policy: "fixture-version-mismatch; contract v99 unsupported by expected v1", context: { tenant: identity.tenant, actor: identity.actor, tool: "search" }, trace, counters }));
   assert.equal(counters.tool, 0, "incompatible contract must fail closed");
+  const body = await response.json() as any;
+  assert.equal(body.status, "partial_denied");
+  assert.equal(body.blocked?.[0]?.status, "denied");
+  assert.match(body.blocked?.[0]?.policy?.reasons?.join(" ") ?? "", /contract version unsupported/i);
+});
+
+test("INTERLOCK-APPROVAL-001 / pending approval without an approval reference must fail closed", async (t) => {
+  const trace: TraceEvent[] = [];
+  const safety = safetyBinding(async (request) => {
+    const body = await request.json() as any;
+    const isTool = body.action.tool === "search";
+    trace.push({
+      phase: "interlock-response",
+      tenant: body.identity.tenant,
+      tool: body.action.tool,
+      status: isTool ? "pending_approval" : "allowed",
+      branch: isTool ? "approval-reference-omitted" : "explicit-allow",
+    });
+    return isTool
+      ? Response.json({
+          status: "pending_approval",
+          contract_version: "1",
+          policy: { id: "fixture-approval-missing-id", version: "fixture-v1", effect: "require_approval" },
+        })
+      : allowedResponse("fixture-allow");
+  });
+  const { node, counters } = makeAgent(safety);
+  const response = await execute(node);
+  t.diagnostic(JSON.stringify({
+    policy: "pending_approval without approval_id must be treated as malformed and denied",
+    context: { tenant: identity.tenant, actor: identity.actor, tool: "search" },
+    trace,
+    counters,
+  }));
+  assert.equal(counters.tool, 0, "an approval state without a reference must never execute the tool");
+  assert.equal(response.status, 200);
+  const body = await response.json() as any;
+  assert.equal(body.status, "partial_denied");
+  assert.equal(body.blocked?.[0]?.status, "denied");
+  assert.match(body.blocked?.[0]?.policy?.reasons?.join(" ") ?? "", /approval reference missing/i);
 });
