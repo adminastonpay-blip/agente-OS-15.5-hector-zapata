@@ -296,8 +296,13 @@ export async function handleV21(
   if (path === "/v1/pii/mask" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     const text = String(body.text || "");
-    const secret = env.PII_HMAC_SECRET || "aston-edge-default-pii";
-    const { masked } = await maskForAgent(text, body.clearance || identity.clearance, secret);
+    // Stable PII pseudonyms require a deployment-managed secret. Never fall
+    // back to a public constant, and never let request data raise clearance.
+    const secret = env.PII_HMAC_SECRET;
+    if (typeof secret !== "string" || new TextEncoder().encode(secret).byteLength < 32) {
+      return json({ ok: false, error: "pii_hmac_secret_not_configured" }, 503);
+    }
+    const { masked } = await maskForAgent(text, identity.clearance, secret);
     return json({ ok: true, masked });
   }
 
