@@ -56,6 +56,7 @@ export async function certifyArtifact(
   try {
     const r = await chat(
       env,
+      identity,
       [
         {
           role: "system",

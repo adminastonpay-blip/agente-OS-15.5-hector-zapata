@@ -43,7 +43,7 @@ export async function handleDefense(
     if (!triage.auto_close && (triage.label === "suspicious" || triage.label === "malicious")) {
       incident.status = "investigating";
       try {
-        incident.investigation = await deepInvestigate(env, incident);
+        incident.investigation = await deepInvestigate(env, identity, incident);
       } catch (e: any) {
         incident.investigation = `investigate_error: ${String(e?.message || e).slice(0, 120)}`;
       }

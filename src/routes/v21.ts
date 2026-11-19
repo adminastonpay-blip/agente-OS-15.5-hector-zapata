@@ -340,7 +340,10 @@ export async function handleV21(
     if (!env.ETL_QUEUE) {
       return json({ ok: true, queued: false, note: "ETL_QUEUE not bound — dry-run", payload: body });
     }
-    await env.ETL_QUEUE.send({ ...body, actor: identity.actor, ts: Date.now() });
+    if (!identity.tenant?.trim() || !identity.actor?.trim()) {
+      return json({ ok: false, error: "verified_tenant_identity_required" }, 403);
+    }
+    await env.ETL_QUEUE.send({ ...body, tenant: identity.tenant, actor: identity.actor, ts: Date.now() });
     return json({ ok: true, queued: true });
   }
 

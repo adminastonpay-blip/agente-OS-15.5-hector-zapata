@@ -116,7 +116,7 @@ export async function handleFactory(
         ? body.input
         : { input: body.input ?? body.message ?? "" };
 
-    const result = await runRecipe(env, tool, input);
+    const result = await runRecipe(env, identity, tool, input);
     if (!result.ok) return json({ ok: false, error: result.error }, 400);
 
     await logPayment(env, identity, {

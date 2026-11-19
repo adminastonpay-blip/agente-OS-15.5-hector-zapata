@@ -60,7 +60,7 @@ export async function recordDecision(
   let outcome = input.outcome;
   if (!outcome && input.run_model !== false && env.AI) {
     try {
-      const out = await chat(env, prompts, { max_tokens: 512, temp: 0 });
+      const out = await chat(env, identity, prompts, { max_tokens: 512, temp: 0 });
       outcome = out.response;
     } catch (e: any) {
       outcome = `error:${String(e?.message || e).slice(0, 120)}`;
@@ -138,7 +138,7 @@ export async function replayDecision(
 
   try {
     // Deterministic-ish: temperature 0, same prompts
-    const out = await chat(env, pkg.prompts, { max_tokens: 512, temp: 0 });
+    const out = await chat(env, identity, pkg.prompts, { max_tokens: 512, temp: 0 });
     const replay_outcome = out.response || "";
     const replay_outcome_hash = await hashObject(replay_outcome);
     const original_outcome_hash = pkg.outcome_hash || (await hashObject(pkg.outcome || ""));

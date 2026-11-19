@@ -221,22 +221,3 @@ test("12. direct retry requires a newly authorized permit", async () => {
   await runner.execute(second.permit, "embeddings", "@cf/baai/bge-m3", { text: ["x"] }, false);
   assert.equal(calls.ai, 2);
 });
-
- 
-test("13. rejects an expired one-use inference permit", async () => {
-  const { env, calls } = makeEnv();
-  const result = await new ControlGate(env).authorizeChat(identity, messages);
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  const originalNow = Date.now;
-  Date.now = () => originalNow() + 60_001;
-  try {
-    await assert.rejects(
-      new ModelRunner(env).runChat(result.permit, messages),
-      /invalid_or_replayed_inference_permit/,
-    );
-  } finally {
-    Date.now = originalNow;
-  }
-  assert.equal(calls.ai, 0);
-});

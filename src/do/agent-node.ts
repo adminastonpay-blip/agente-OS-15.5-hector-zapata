@@ -1,4 +1,4 @@
-import type { Env } from "../types";
+import type { Env, Identity } from "../types";
 import { createObject } from "../ontology";
 import { maskForAgent, restoreFromVault } from "../pii";
 import { embed, chat } from "../lib/ai";
@@ -12,6 +12,9 @@ export class AgentNode {
       return new Response("not found", { status: 404 });
 
     const { role, goal, context, identity, tools } = await req.json<any>();
+    if (!identity || identity.method === "public" || !identity.actor?.trim() || !identity.tenant?.trim() || !Array.isArray(identity.roles) || !identity.clearance) {
+      return Response.json({ error: "verified_inference_identity_required" }, { status: 403 });
+    }
     let attempts = 0,
       lastErr = "";
     while (attempts < 3) {
@@ -30,7 +33,7 @@ export class AgentNode {
             policy: planGate.policy,
           }, { status: planGate.status === "pending_approval" ? 202 : 503 });
         }
-        const calls = await this.planTools(role, goal, context, tools);
+        const calls = await this.planTools(identity, role, goal, context, tools);
         const obs: string[] = [];
         const blocked: any[] = [];
 
@@ -164,8 +167,8 @@ export class AgentNode {
     }
   }
 
-  private async planTools(role: string, goal: string, context: string, tools: string[]) {
-    const r = await chat(this.env, [
+  private async planTools(identity: Identity, role: string, goal: string, context: string, tools: string[]) {
+    const r = await chat(this.env, identity, [
       {
         role: "system",
         content: `Agente "${role}". Tools: ${(tools || ["reason"]).join(",")}. JSON: {"tools":[{"tool":"n","args":{}}]}`,
@@ -179,10 +182,10 @@ export class AgentNode {
     }
   }
 
-  private async runTool(identity: any, c: any): Promise<string> {
+  private async runTool(identity: Identity, c: any): Promise<string> {
     if (c.tool === "search") {
       if (!this.env.VECTORIZE) return "search unavailable (VECTORIZE not bound)";
-      const [qvec] = await embed(this.env, [c.args?.query || ""]);
+      const [qvec] = await embed(this.env, identity, [c.args?.query || ""]);
       const m = await this.env.VECTORIZE.query(qvec, { topK: 3, returnMetadata: "all" } as any);
       return (m.matches ?? [])
         .map((x: any) => `[${x.metadata?.source}] ${x.metadata?.chunk}`)
@@ -209,7 +212,7 @@ export class AgentNode {
         })}`;
       throw new Error("unsupported op");
     }
-    const r = await chat(this.env, [
+    const r = await chat(this.env, identity, [
       { role: "system", content: "Razona brevemente. No inventes." },
       { role: "user", content: c.args?.prompt || "" },
     ]);
@@ -217,7 +220,7 @@ export class AgentNode {
   }
 
   private async synthesize(
-    identity: any,
+    identity: Identity,
     role: string,
     goal: string,
     context: string,
