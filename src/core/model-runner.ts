@@ -27,7 +27,8 @@ export class ModelRunner {
     permit: InferencePermit,
     operation: Exclude<InferenceScope, "chat" | "recovery_diagnosis">,
     model: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    useGateway = true
   ): Promise<T> {
     const ai = this.env.AI;
     if (!ai || !model.startsWith("@cf/")) {
@@ -38,7 +39,7 @@ export class ModelRunner {
       throw new Error("invalid_or_replayed_inference_permit");
     }
     return await ai.run(model as any, payload as any,
-      this.env.AI_GATEWAY_ID
+      useGateway && this.env.AI_GATEWAY_ID
         ? ({ gateway: { id: this.env.AI_GATEWAY_ID } } as any)
         : undefined
     ) as T;
