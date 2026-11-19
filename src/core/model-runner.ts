@@ -3,6 +3,7 @@ import {
   consumeInferencePermit,
   type ChatMessage,
   type InferencePermit,
+  type InferenceScope,
 } from "./control-gate";
 
 export interface ChatInferenceResult {
