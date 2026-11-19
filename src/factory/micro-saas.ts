@@ -104,6 +104,7 @@ export async function generateMicroTool(
 ): Promise<MicroTool> {
   const out = await chat(
     env,
+    identity,
     [
       { role: "system", content: GEN_SYSTEM },
       {
@@ -245,6 +246,7 @@ export async function getTool(
 
 export async function runRecipe(
   env: Env,
+  identity: Identity,
   tool: MicroTool,
   input: Record<string, unknown>
 ): Promise<{ ok: true; output: unknown; steps: any[] } | { ok: false; error: string }> {
@@ -278,6 +280,7 @@ export async function runRecipe(
         const prompt = applyTemplate(step.prompt, ctx);
         const r = await chat(
           env,
+          identity,
           [
             {
               role: "system",

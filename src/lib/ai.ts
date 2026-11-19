@@ -9,6 +9,22 @@ const FALLBACK_MODELS = [
   "@cf/openai/gpt-oss-20b",
 ];
 
+export function chunk(text: string, size = 1200, overlap = 150): string[] {
+  const normalized = String(text || "").trim();
+  if (!normalized) return [];
+  if (!Number.isInteger(size) || size < 1 || !Number.isInteger(overlap) || overlap < 0 || overlap >= size) {
+    throw new Error("invalid_chunk_configuration");
+  }
+  const chunks: string[] = [];
+  const step = size - overlap;
+  for (let start = 0; start < normalized.length; start += step) {
+    const part = normalized.slice(start, start + size).trim();
+    if (part) chunks.push(part);
+    if (start + size >= normalized.length) break;
+  }
+  return chunks;
+}
+
 function extractText(out: any): string {
   if (!out) return "";
   if (typeof out === "string") return out.trim();

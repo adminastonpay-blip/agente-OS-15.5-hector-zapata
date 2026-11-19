@@ -1,4 +1,4 @@
-import type { Env } from "../types";
+import type { Env, Identity } from "../types";
 import { chat } from "../lib/ai";
 
 const ALLOWED_TOOLS: Record<string, string[]> = {
@@ -16,7 +16,7 @@ export class Supervisor {
     if (u.pathname !== "/plan" || req.method !== "POST")
       return new Response("not found", { status: 404 });
 
-    const { objective, identity } = await req.json<any>();
+    const { objective, identity } = await req.json<{ objective: string; identity: Identity }>();
 
     const planGate = await this.safetyCheck(identity, {
       tool: "swarm_plan",
@@ -38,7 +38,7 @@ export class Supervisor {
       });
     }
 
-    const planRes = await chat(this.env, [
+    const planRes = await chat(this.env, identity, [
       {
         role: "system",
         content: `Planificador. JSON SOLO: {"tasks":[{"role":"investigator|analyst|verifier|executor","goal":"...","depends_on":[idx]}]}. Máx 6.`,
@@ -156,7 +156,7 @@ export class Supervisor {
   }
 
   private async safetyCheck(
-    identity: any,
+    identity: Identity,
     action: { tool: string; args: Record<string, unknown>; context?: any }
   ) {
     if (!this.env.SAFETY) {

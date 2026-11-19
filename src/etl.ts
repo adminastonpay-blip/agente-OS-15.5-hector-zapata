@@ -1,4 +1,4 @@
-import type { Env } from "./types";
+import type { Env, Identity } from "./types";
 import { emitLineage } from "./lineage";
 import { embed, chunk } from "./lib/ai";
 
@@ -19,7 +19,9 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
       const tenant = requireTenant(job?.tenant);
       if (typeof job.text !== "string" || !job.text.trim()) throw new Error("ETL text required");
       const source = String(job.source || "queue").slice(0, 200);
-      const actor = typeof job.actor === "string" ? job.actor : "trusted-queue";
+      const actor = typeof job.actor === "string" ? job.actor.trim() : "";
+      if (!actor) throw new Error("ETL job requires a trusted actor from the authenticated queue producer");
+      const identity: Identity = { actor, method: "sensor", tenant, roles: ["etl"], clearance: "internal" };
       const rawId = `raw_${crypto.randomUUID()}`;
       await emitLineage(env, {
         tenant,
@@ -31,8 +33,8 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
       });
       const normalized = job.text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
       const chunks = chunk(normalized);
-      const vectors = await embed(env, chunks);
-      const upserts = chunks.map((value, i) => ({
+      const vectors = await embed(env, identity, chunks);
+      const upserts = chunks.map((value: string, i: number) => ({
         id: `${source}#${i}-${crypto.randomUUID().slice(0, 8)}`,
         values: vectors[i],
         namespace: tenant,
@@ -73,7 +75,8 @@ export async function handleCron(env: Env) {
   ).bind(cutoff).all();
   for (const row of stale.results as any[]) {
     const tenant = requireTenant(row.tenant);
-    const [vector] = await embed(env, [row.chunk]);
+    const identity: Identity = { actor: "cron", method: "sensor", tenant, roles: ["etl"], clearance: "internal" };
+    const [vector] = await embed(env, identity, [row.chunk]);
     await vectorize.upsert([{
       id: row.id,
       values: vector,

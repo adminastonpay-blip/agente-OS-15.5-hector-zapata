@@ -26,8 +26,9 @@ class FakeSqlStorage {
       const [ts, tenant, actor, event_type, record_json, previous_hash, event_hash] = args;
       this.audit.push({ ts, tenant, actor, event_type, record_json, previous_hash, event_hash });
     } else if (q.startsWith("INSERT INTO pending_approvals")) {
-      const [id, action_json, identity_json, policy_json, created_at, expires_at, status] = args;
-      this.pending.set(String(id), { id, action_json, identity_json, policy_json, created_at, expires_at, status });
+      const [id, action_json, identity_json, policy_json, created_at, expires_at] = args;
+      // The production INSERT supplies status as the SQL literal 'pending', not a bind parameter.
+      this.pending.set(String(id), { id, action_json, identity_json, policy_json, created_at, expires_at, status: "pending" });
     } else if (q.startsWith("SELECT * FROM pending_approvals WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
       rows = row ? [{ ...row }] : [];

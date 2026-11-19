@@ -1,5 +1,6 @@
-import type { Env } from "../types";
+import type { Env, Identity } from "../types";
 import { emitLineage } from "../lineage";
+import { chat } from "../lib/ai";
 
 export class SimulationTwin {
   private sql: SqlStorage;
@@ -106,27 +107,12 @@ Analiza impacto, riesgos y recomendación. Sé breve.`;
 
       let evaluation = "simulation unavailable";
       try {
-        const ai = this.env.AI;
-        if (!ai) throw new Error("AI binding not configured");
-        const input = { messages: [{ role: "user", content: prompt }] } as any;
-        let r: any;
-        if (this.env.AI_GATEWAY_ID) {
-          try {
-            r = await ai.run(this.env.CHAT_MODEL as any, input, {
-              gateway: { id: this.env.AI_GATEWAY_ID },
-            } as any);
-          } catch {
-            r = await ai.run(this.env.CHAT_MODEL as any, input);
-          }
-        } else {
-          r = await ai.run(this.env.CHAT_MODEL as any, input);
-        }
-        evaluation =
-          typeof r?.response === "string"
-            ? r.response
-            : typeof r === "string"
-              ? r
-              : JSON.stringify(r);
+        const identity = body.identity as Identity;
+        const result = await chat(this.env, identity, [
+          { role: "system", content: "Evaluá el impacto y los riesgos del gemelo digital. No inventes datos; diferenciá hechos de hipótesis." },
+          { role: "user", content: prompt },
+        ], { max_tokens: 512, temp: 0.1 });
+        evaluation = result.response;
       } catch (e: any) {
         evaluation = `AI error: ${String(e?.message || e).slice(0, 120)}`;
       }

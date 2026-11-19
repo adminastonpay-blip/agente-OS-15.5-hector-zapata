@@ -156,6 +156,7 @@ export function proposeMitigation(triage: TriageResult, evidence: Evidence[]): M
 
 export async function deepInvestigate(
   env: Env,
+  identity: Identity,
   incident: Incident
 ): Promise<string> {
   const evidenceText = incident.evidence
@@ -165,6 +166,7 @@ export async function deepInvestigate(
 
   const r = await chat(
     env,
+    identity,
     [
       {
         role: "system",
