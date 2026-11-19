@@ -17,10 +17,19 @@ concurrency:
 
 jobs:
   validate-and-deploy-staging:
-    if: ${{ inputs.confirm_staging_deploy == 'DEPLOY-STAGING' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Validate explicit staging confirmation
+        env:
+          STAGING_CONFIRMATION: ${{ inputs.confirm_staging_deploy }}
+        run: |
+          set -euo pipefail
+          if [ "$STAGING_CONFIRMATION" != "DEPLOY-STAGING" ]; then
+            echo "::error::Confirmation missing or incorrect. Enter exactly DEPLOY-STAGING to continue."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
