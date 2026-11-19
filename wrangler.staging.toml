@@ -31,7 +31,7 @@ max_concurrency = 1
 binding = "DB"
 database_name = "aston-rag-staging-db"
 database_id = "457d72d6-388b-4dad-bdd0-b32d3e905e00"
-migrations_dir = "migrations"
+migrations_dir = "migrations-staging"
 
 # Dedicated Vectorize index for isolated RAG staging only.
 [[vectorize]]
