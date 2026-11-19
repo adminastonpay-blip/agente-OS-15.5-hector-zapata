@@ -147,6 +147,7 @@ export async function createPlan(
   });
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: planId,
     transformation: "agent.plan.created",
     pipeline_version: "v1.1-risk",
@@ -297,6 +298,7 @@ export async function approvePlan(
   });
 
   await emitLineage(env, {
+    tenant: id.tenant,
     object_id: planId,
     transformation: input.approve ? "agent.plan.approved" : "agent.plan.rejected",
     pipeline_version: "v1.1-risk",
@@ -467,6 +469,7 @@ export async function executePlan(env: Env, id: Identity, planId: string) {
     }
 
     await emitLineage(env, {
+      tenant: id.tenant,
       object_id: planId,
       parent_ids: action.target_id ? [action.target_id] : [],
       transformation: "agent.action.executed",
