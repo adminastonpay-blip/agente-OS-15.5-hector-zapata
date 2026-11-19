@@ -28,11 +28,11 @@ CREATE INDEX IF NOT EXISTS idx_link_tenant_to ON links(tenant, to_id, type);
 
 -- ===== Pilar: Linaje =====
 CREATE TABLE IF NOT EXISTS lineage_events (
-  id TEXT PRIMARY KEY, object_id TEXT NOT NULL, parent_ids TEXT,
+  id TEXT PRIMARY KEY, tenant TEXT NOT NULL, object_id TEXT NOT NULL, parent_ids TEXT,
   transformation TEXT NOT NULL, pipeline_version TEXT NOT NULL,
   model TEXT, actor TEXT, metadata TEXT, ts INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_lin_obj ON lineage_events(object_id);
+CREATE INDEX IF NOT EXISTS idx_lin_tenant_obj_ts ON lineage_events(tenant, object_id, ts DESC);
 
 -- ===== Pilar: Swarm =====
 CREATE TABLE IF NOT EXISTS swarm_tasks (
