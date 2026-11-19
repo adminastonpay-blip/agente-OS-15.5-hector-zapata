@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import { handleETLQueue } from "./etl";
+import { handleETLIngest } from "./etl-ingest";
 import { ControlGate } from "./core/control-gate";
 import { ModelRunner } from "./core/model-runner";
 import { SessionMemory } from "./do/session";
@@ -321,6 +322,14 @@ export default {
     const access = authorizeApiRequest(req, path, identity);
     if (!access.allowed) {
       return json({ ok: false, error: access.error }, access.status);
+    }
+
+    if (path === "/v1/etl/ingest" && req.method === "POST") {
+      // ETL ingress is deliberately enabled only on the isolated staging Worker.
+      if (!String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")) {
+        return json({ ok: false, error: "etl_ingest_disabled_outside_staging" }, 404);
+      }
+      return handleETLIngest(req, env, identity, json);
     }
 
     if (path === "/v1/recovery/diagnose" && req.method === "POST") {
