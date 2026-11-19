@@ -49,7 +49,8 @@ export class ModelRunner {
     action: "recovery_diagnosis",
     content: string,
     options: { maxTokens?: number; temperature?: number } = {},
-    modelOverride?: string
+    modelOverride?: string,
+    useGateway = true
   ): Promise<ChatInferenceResult> {
     const ai = this.env.AI;
     const model = modelOverride || this.env.CHAT_MODEL;
@@ -104,7 +105,7 @@ export class ModelRunner {
 
     // No fallback model and no unguarded retry: one permit authorizes one call.
     const output = await ai.run(model as any, input as any,
-      this.env.AI_GATEWAY_ID
+      useGateway && this.env.AI_GATEWAY_ID
         ? ({ gateway: { id: this.env.AI_GATEWAY_ID } } as any)
         : undefined
     ) as any;
