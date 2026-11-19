@@ -40,25 +40,26 @@ export async function runRouted(
   const chatRoute = profile.startsWith("chat");
   let lastErr = "";
   for (const model of modelsFor(env, profile)) {
-    const operation = chatRoute ? "chat" : "embeddings";
-    const messages = input.messages as any[] | undefined;
-    const gate = chatRoute
-      ? await new ControlGate(env).authorizeChat(identity, messages || [], model)
-      : await new ControlGate(env).authorizeInference(identity, "embeddings", input, model);
-    if (!gate.ok) throw new Error(gate.reason);
-    try {
-      if (chatRoute) {
-        const out = await new ModelRunner(env).runChat(gate.permit, messages || [], {
-          maxTokens: Number(input.max_tokens) || 512,
-          temperature: Number(input.temperature) || 0.2,
-        }, model);
-        return { model, out, via: env.AI_GATEWAY_ID ? "gateway" : "direct" };
+    const attempts = env.AI_GATEWAY_ID ? [true, false] : [false];
+    for (const useGateway of attempts) {
+      const messages = input.messages as any[] | undefined;
+      const gate = chatRoute
+        ? await new ControlGate(env).authorizeChat(identity, messages || [], model)
+        : await new ControlGate(env).authorizeInference(identity, "embeddings", input, model);
+      if (!gate.ok) throw new Error(gate.reason);
+      try {
+        if (chatRoute) {
+          const out = await new ModelRunner(env).runChat(gate.permit, messages || [], {
+            maxTokens: Number(input.max_tokens) || 512,
+            temperature: Number(input.temperature) || 0.2,
+          }, model, useGateway);
+          return { model, out, via: useGateway && env.AI_GATEWAY_ID ? "gateway" : "direct" };
+        }
+        const out = await new ModelRunner(env).execute(gate.permit, "embeddings", model, input, useGateway);
+        return { model, out, via: useGateway && env.AI_GATEWAY_ID ? "gateway" : "direct" };
+      } catch (error: any) {
+        lastErr = String(error?.message || error);
       }
-      const out = await new ModelRunner(env).execute(gate.permit, operation, model, input);
-      return { model, out, via: env.AI_GATEWAY_ID ? "gateway" : "direct" };
-    } catch (error: any) {
-      lastErr = String(error?.message || error);
-      // A new permit is requested at the start of the next model attempt.
     }
   }
   throw new Error(lastErr || "AI router exhausted models");
