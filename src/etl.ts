@@ -28,8 +28,8 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
       await vectorize.upsert(upserts as any);
       for (const u of upserts) {
         await db.prepare(
-          "INSERT OR REPLACE INTO documents (id, source, chunk, created_at) VALUES (?, ?, ?, ?)"
-        ).bind(u.id, u.metadata.source, u.metadata.chunk, Date.now()).run();
+          "INSERT OR REPLACE INTO documents (id, source, chunk, created_at, tenant) VALUES (?, ?, ?, ?, ?)"
+        ).bind(u.id, u.metadata.source, u.metadata.chunk, Date.now(), job.tenant).run();
         await emitLineage(env, {
           tenant: job.tenant,
           object_id: u.id, parent_ids: [rawId], transformation: "etl.chunk.embed",
@@ -43,20 +43,22 @@ export async function handleETLQueue(batch: MessageBatch<any>, env: Env) {
 }
 
 export async function handleCron(env: Env) {
-  // The current documents schema has no authoritative tenant column. Do not re-embed
-  // or emit tenantless lineage for a cross-tenant cron scan; enable after a tenant-scoped migration.
-  throw new Error("cron ETL disabled until documents have authoritative tenant ownership");
   const db = env.DB;
   const vectorize = env.VECTORIZE;
   if (!db || !vectorize) throw new Error("Cron ETL requires DB and VECTORIZE bindings");
   const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  // Only re-embed rows with explicit tenant ownership. Legacy rows stay excluded.
   const stale = await db.prepare(
-    `SELECT id, source, chunk FROM documents WHERE created_at < ? LIMIT 50`
+    `SELECT id, source, chunk, tenant FROM documents
+     WHERE created_at < ? AND tenant IS NOT NULL AND tenant != '' LIMIT 50`
   ).bind(cutoff).all();
   for (const d of stale.results as any[]) {
+    if (typeof d.tenant !== "string" || !d.tenant.trim()) continue;
     const [v] = await embed(env, [d.chunk]);
-    await vectorize.upsert([{ id: d.id, values: v,
-      metadata: { source: d.source, chunk: d.chunk.slice(0, 500) } }] as any);
+    await vectorize.upsert([{
+      id: d.id, values: v,
+      metadata: { source: d.source, chunk: d.chunk.slice(0, 500), tenant: d.tenant },
+    }] as any);
     await emitLineage(env, {
       tenant: d.tenant,
       object_id: d.id, transformation: "cron.reembed",
