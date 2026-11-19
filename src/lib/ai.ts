@@ -26,10 +26,19 @@ export async function embed(env: Env, identity: Identity, texts: string[]): Prom
   const model = env.EMBED_MODEL;
   if (!model || !model.startsWith("@cf/")) throw new Error("embedding_model_not_configured");
   const payload = { text: texts };
-  const gate = await new ControlGate(env).authorizeInference(identity, "embeddings", payload, model);
-  if (!gate.ok) throw new Error(gate.reason);
-  const result = await new ModelRunner(env).execute<any>(gate.permit, "embeddings", model, payload);
-  return result?.data ?? [];
+  const attempts = env.AI_GATEWAY_ID ? [true, false] : [false];
+  let lastError: unknown;
+  for (const useGateway of attempts) {
+    const gate = await new ControlGate(env).authorizeInference(identity, "embeddings", payload, model);
+    if (!gate.ok) throw new Error(gate.reason);
+    try {
+      const result = await new ModelRunner(env).execute<any>(gate.permit, "embeddings", model, payload, useGateway);
+      return result?.data ?? [];
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("embedding_inference_failed");
 }
 
 /** Each fallback model receives a new model-bound, one-use permit. */
