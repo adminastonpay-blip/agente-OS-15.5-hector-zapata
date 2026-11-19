@@ -22,6 +22,10 @@ database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
 binding = "ETL_QUEUE"
 queue = "aston-global-queue"
 
+[[previews.queues.producers]]
+binding = "ETL_QUEUE"
+queue = "aston-global-queue-preview"
+
 # Cloudflare Workers Preview must use isolated staging data resources.
 # Keep production bindings above unchanged; Preview overrides DB and Vectorize.
 [previews.vars]
