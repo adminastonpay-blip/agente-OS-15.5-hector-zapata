@@ -105,6 +105,15 @@ test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense m
   assert.equal(decision.status, "approved");
   assert.equal(decision.decided_by, operator);
 
+  const replayResponse = await interlock.fetch(new Request("https://safety.internal/decide", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ approval_id: gate.approval_id, approved: true, operator }),
+  }));
+  const replay = await replayResponse.json<any>();
+  assert.equal(replay.error, "already approved");
+  assert.equal(replay.status, 409);
+
   const logResponse = await interlock.fetch(new Request("https://safety.internal/log?limit=10"));
   const log = await logResponse.json<any>();
   assert.ok(log.entries.some((entry: Row) => entry.actor === operator && entry.decision === "approved"));
