@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { handleETLQueue } from "./etl";
 import { ControlGate } from "./core/control-gate";
 import { ModelRunner } from "./core/model-runner";
 import { SessionMemory } from "./do/session";
@@ -513,5 +514,10 @@ export default {
     if (v21) return v21;
 
     return json({ error: "not found", version: VERSION }, 404);
+  },
+  // ETL queue processing is wired here; queue consumers remain explicitly configured
+  // per environment so this change does not activate production consumption.
+  async queue(batch: MessageBatch<any>, env: Env): Promise<void> {
+    await handleETLQueue(batch, env);
   },
 } satisfies ExportedHandler<Env>;
