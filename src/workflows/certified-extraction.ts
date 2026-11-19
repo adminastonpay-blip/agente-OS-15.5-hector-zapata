@@ -8,7 +8,7 @@ import {
   WorkflowStep,
   WorkflowEvent,
 } from "cloudflare:workers";
-import type { Env } from "../types";
+import type { Env, Identity } from "../types";
 import type { ExtractionPayload, ExtractedField } from "../extraction/types";
 import { runClairic, partitionFields, hashInput } from "../extraction/clairic";
 import { buildAndSignCertificate } from "../extraction/certificate";
@@ -20,6 +20,16 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
 > {
   async run(event: WorkflowEvent<ExtractionPayload>, step: WorkflowStep) {
     const p = event.payload;
+    const extractionIdentity: Identity = {
+      actor: p.actor,
+      method: "apikey",
+      tenant: p.tenant,
+      roles: ["executor"],
+      clearance: "confidential",
+    };
+    if (!extractionIdentity.actor?.trim() || !extractionIdentity.tenant?.trim()) {
+      throw new Error("verified_extraction_identity_required");
+    }
 
     const inputHash = await step.do("hash-input", async () => {
       return hashInput(p.rawText ?? "", p.images ?? []);
@@ -32,7 +42,7 @@ export class CertifiedExtractionWorkflow extends WorkflowEntrypoint<
         timeout: "60 seconds",
       },
       async () => {
-        return runClairic(this.env, {
+        return runClairic(this.env, extractionIdentity, {
           text: p.rawText,
           images: p.images,
           schema: p.schema,

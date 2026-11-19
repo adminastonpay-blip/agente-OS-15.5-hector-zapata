@@ -4,7 +4,7 @@ import { RateLimiter } from "./rate-limiter";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-export type InferenceScope = "chat" | "embeddings" | "tts" | "recovery_diagnosis";
+export type InferenceScope = "chat" | "embeddings" | "tts" | "extraction" | "recovery_diagnosis";
 
 const INFERENCE_PERMIT_TTL_MS = 60_000;
 const issuedPermits = new WeakMap<object, { action: InferenceScope; payload: string; model: string; expiresAt: number }>();
@@ -142,7 +142,7 @@ export class ControlGate {
    */
   async authorizeInference(
     identity: Identity,
-    action: "embeddings" | "tts",
+    action: "embeddings" | "tts" | "extraction",
     payload: Record<string, unknown>,
     model: string
   ): Promise<GateResult> {
@@ -175,13 +175,13 @@ export class ControlGate {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: {
-            tool: action === "embeddings" ? "model_embeddings" : "model_tts",
+            tool: action === "embeddings" ? "model_embeddings" : action === "extraction" ? "model_extraction" : "model_tts",
             args: {
               model,
               payload: serialized.slice(0, 8_000),
               payload_sha256: await this.sha256(serialized),
             },
-            context: { objective: action === "embeddings" ? "authorize tenant-scoped embeddings" : "authorize text-to-speech" },
+            context: { objective: action === "embeddings" ? "authorize tenant-scoped embeddings" : action === "extraction" ? "authorize structured document extraction" : "authorize text-to-speech" },
           },
           identity,
         }),

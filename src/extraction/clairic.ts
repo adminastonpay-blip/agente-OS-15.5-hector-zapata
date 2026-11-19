@@ -2,7 +2,9 @@
  * Clairic extraction + field partitioning
  */
 
-import type { Env } from "../types";
+import type { Env, Identity } from "../types";
+import { ControlGate } from "../core/control-gate";
+import { ModelRunner } from "../core/model-runner";
 import type { FieldSchema, ExtractedField, ClairicResult } from "./types";
 
 const DEFAULT_MIN_CONF = 0.9;
@@ -10,6 +12,7 @@ const DEFAULT_MAX_PNULL = 0.15;
 
 export async function runClairic(
   env: Env,
+  identity: Identity,
   opts: {
     text?: string;
     images?: string[];
@@ -20,21 +23,25 @@ export async function runClairic(
     opts.schema.map((f) => [f.name, { type: f.type, description: f.description ?? "" }])
   );
 
-  const ai = env.AI;
-  if (!ai) {
-    return { fields: opts.schema.map((s) => ({ name: s.name, value: null, confidence: 0, p_null: 1 })) };
-  }
+  const model = "@cf/cloudflare/clairic";
+  const payload = {
+    state: {
+      text: opts.text ?? "",
+      images: opts.images ?? [],
+    },
+    schema: schemaPayload,
+    options: { include_quantiles: true },
+  };
   try {
-    const res = (await ai.run("@cf/cloudflare/clairic" as any, {
-      state: {
-        text: opts.text ?? "",
-        images: opts.images ?? [],
-      },
-      schema: schemaPayload,
-      options: { include_quantiles: true },
-    } as any, {
-      gateway: { id: env.AI_GATEWAY_ID },
-    } as any)) as any;
+    const gate = await new ControlGate(env).authorizeInference(identity, "extraction", payload, model);
+    if (!gate.ok) throw new Error(gate.reason);
+    const res = await new ModelRunner(env).execute<any>(
+      gate.permit,
+      "extraction",
+      model,
+      payload,
+      Boolean(env.AI_GATEWAY_ID)
+    );
 
     const fields = (res.fields ?? res.data ?? []).map((f: any) => ({
       name: f.name,
