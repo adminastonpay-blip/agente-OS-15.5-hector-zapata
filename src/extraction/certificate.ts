@@ -97,6 +97,7 @@ export async function buildAndSignCertificate(
   );
 
   await emitLineage(env, {
+    tenant: opts.tenant,
     object_id,
     transformation: "cee.certify",
     pipeline_version: "v15.5",
