@@ -9,6 +9,7 @@ const PUBLIC_READ_PATHS = new Set([
   "/v1/risk/status", "/v1/defense/status", "/v1/infra/status",
   "/v1/economy/status", "/v1/provenance/status", "/v1/sovereign/status",
   "/v1/sovereign/tenant", "/v1/crypto/pq", "/v1/ai/routes",
+  "/command", "/command.css", "/command.js",
 ]);
 
 // These POST routes are intentionally public and do not mutate tenant data,
