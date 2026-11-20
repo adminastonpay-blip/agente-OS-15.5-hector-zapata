@@ -43,6 +43,7 @@ jobs:
         with:
           node-version: 22
 
+      # Credential values are supplied as repository-level Actions secrets at job runtime.
       - name: Validate staging-only target and credentials
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
