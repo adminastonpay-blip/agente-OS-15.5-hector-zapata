@@ -1,9 +1,6 @@
 /** Cloudflare Worker Env — optional resources soft-fail when unbound. */
 export interface Env {
-  // AI is expected; chat soft-fails if missing
   AI?: Ai;
-
-  // Durable Objects — optional so deploy works even if binding lags
   SESSION?: DurableObjectNamespace;
   GRAPH?: DurableObjectNamespace;
   SUPERVISOR?: DurableObjectNamespace;
@@ -11,26 +8,16 @@ export interface Env {
   SIMULATION?: DurableObjectNamespace;
   MISSION?: DurableObjectNamespace;
   SAFETY?: DurableObjectNamespace;
-  /** Tenant-partitioned, SQLite-backed single-use mission token claims. */
   REPLAY_GUARD?: DurableObjectNamespace;
-  /** Cloudflare Workflow binding used only by the authenticated Recovery entrypoint. */
-  RECOVERY_WORKFLOW?: {
-    create(options: { id?: string; params: MissionParams }): Promise<{ id: string }>;
-  };
-
-  // Optional platform resources
+  RECOVERY_WORKFLOW?: { create(options: { id?: string; params: MissionParams }): Promise<{ id: string }> };
   DB?: D1Database;
   VECTORIZE?: VectorizeIndex;
   JOURNAL?: R2Bucket;
-  /** Dedicated Object-Locked R2 bucket for external audit checkpoints and OTS receipts. */
   AUDIT_ARCHIVE?: R2Bucket;
-  /** Dedicated service binding that validates OpenTimestamps proofs against Bitcoin headers. */
   OTS_VERIFIER?: Fetcher;
   ETL_QUEUE?: Queue;
   MISSIONS?: Queue;
   HYPERDRIVE?: Hyperdrive;
-
-  // Vars / secrets
   AI_GATEWAY_ID?: string;
   CHAT_MODEL?: string;
   EMBED_MODEL?: string;
@@ -45,9 +32,7 @@ export interface Env {
   ACCESS_AUD?: string;
   CF_ACCOUNT_ID?: string;
   CF_API_TOKEN?: string;
-  /** Comma-separated HTTPS origins allowed for recovery HEAD probes. Empty means deny all. */
   RECOVERY_ALLOWED_ORIGINS?: string;
-  /** Base64url-encoded raw 32-byte Ed25519 public key; configure out-of-band. */
   MISSION_TOKEN_PUBLIC_KEY?: string;
 }
 
@@ -57,8 +42,20 @@ export interface Identity {
   tenant: string;
   roles: string[];
   clearance: "public" | "internal" | "confidential" | "secret";
-  /** Optional plan asserted by a verified identity provider, never by a request header. */
   plan?: "free" | "pro" | "sovereign" | "gov";
+}
+
+/**
+ * Internal authentication evidence. This is not a tenant authorization decision.
+ * Keep it separate from Identity because Identity is serialized into existing DO flows.
+ */
+export type AuthenticatedPrincipal =
+  | { kind: "access"; verified: true; issuer: string; subject: string; tenantClaim: string | null; tenantAuthority: "unresolved" }
+  | { kind: "api_key" | "sensor"; verified: true; credentialId: string; tenantAuthority: "unresolved" };
+
+export interface AuthenticatedContext {
+  identity: Identity;
+  principal: AuthenticatedPrincipal | null;
 }
 
 export interface Mission {
@@ -71,7 +68,6 @@ export interface Mission {
   created_by: string;
 }
 
-/** Recovery payload carries a signed, narrowly scoped mission token. */
 export interface MissionParams extends Mission {
   mission_token: string;
 }
