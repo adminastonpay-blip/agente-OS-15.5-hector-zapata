@@ -74,3 +74,46 @@ test("fails closed when D1 is unavailable", async () => {
     kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123", issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
   }));
 });
+
+
+test("fails closed for a suspended or revoked tenant", async () => {
+  for (const tenant_status of ["pending", "suspended", "revoked", "offboarded"]) {
+    const db = fakeDb({ ...activeRow, tenant_status });
+    assert.equal(await createD1TenantIdentityAuthority(db as never, { now: () => 500 }).resolve({
+      kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123",
+      issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
+    }), null);
+  }
+});
+
+test("fails closed for a suspended or revoked membership", async () => {
+  for (const membership_status of ["suspended", "revoked"]) {
+    const db = fakeDb({ ...activeRow, membership_status });
+    assert.equal(await createD1TenantIdentityAuthority(db as never, { now: () => 500 }).resolve({
+      kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123",
+      issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
+    }), null);
+  }
+});
+
+test("enforces membership not-before and expiry boundaries", async () => {
+  const principal = {
+    kind: "access" as const, verified: true as const,
+    principalId: "access:https://team.cloudflareaccess.com:sub-123",
+    issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
+  };
+  const future = fakeDb({ ...activeRow, membership_not_before: 501 });
+  assert.equal(await createD1TenantIdentityAuthority(future as never, { now: () => 500 }).resolve(principal), null);
+  const expired = fakeDb({ ...activeRow, membership_expires_at: 500 });
+  assert.equal(await createD1TenantIdentityAuthority(expired as never, { now: () => 500 }).resolve(principal), null);
+  const valid = fakeDb({ ...activeRow, membership_not_before: 500, membership_expires_at: 501 });
+  assert.equal((await createD1TenantIdentityAuthority(valid as never, { now: () => 500 }).resolve(principal))?.tenant.tenantId, "tenant-a");
+});
+
+test("fails closed when the authority clock is invalid", async () => {
+  const db = fakeDb(activeRow);
+  assert.equal(await createD1TenantIdentityAuthority(db as never, { now: () => Number.NaN }).resolve({
+    kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123",
+    issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
+  }), null);
+});
