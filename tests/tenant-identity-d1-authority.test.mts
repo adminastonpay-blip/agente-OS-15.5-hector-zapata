@@ -31,6 +31,7 @@ test("resolves Access identity by verified issuer and subject, never by tenant c
   });
   assert.equal(result?.tenant.tenantId, "tenant-a");
   assert.deepEqual(result?.membership.capabilities, ["risk.read"]);
+  assert.equal(result?.membership.principalId, "access:https://team.cloudflareaccess.com:sub-123");
   assert.deepEqual(db.calls[0].slice(1), ["https://team.cloudflareaccess.com", "sub-123"]);
 });
 
