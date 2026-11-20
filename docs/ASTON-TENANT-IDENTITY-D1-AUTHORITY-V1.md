@@ -14,7 +14,7 @@ Read-only authority provider that maps cryptographically verified Access issuer+
 - Provider is read-only; it cannot enroll, activate, revoke or change bindings.
 - Missing binding, malformed JSON, invalid principal, legacy tenant, or D1 error never grants authority.
 - It does not change route behavior and is not wired into request execution.
-- API key and sensor currently share one secret. They produce the same fingerprint; the registry differentiates auth method, but this does not create separate credentials. A distinct sensor secret is required before independently authorizing the sensor.
+- API key and sensor currently share one secret. The schema enforces one unique credential fingerprint across both classes, so the shared secret cannot be enrolled as both API and sensor identities. A distinct sensor secret is required before independently authorizing the sensor.
 - No existing identity receives authority until an administrator provisions a binding through a separately authenticated control-plane workflow.
 - The proposed migrations are not applied to Preview or Production D1.
 
