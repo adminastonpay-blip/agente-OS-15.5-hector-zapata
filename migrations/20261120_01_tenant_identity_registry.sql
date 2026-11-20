@@ -30,9 +30,11 @@ CREATE TABLE IF NOT EXISTS aston_tenant_identity_bindings (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_aston_identity_access_principal
   ON aston_tenant_identity_bindings(auth_method, issuer, subject)
   WHERE auth_method = 'access';
+-- A fingerprint may belong to exactly one credential class. This blocks using the
+-- currently shared API_KEY as both API and sensor identity by changing the header.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_aston_identity_credential
-  ON aston_tenant_identity_bindings(auth_method, credential_id)
-  WHERE auth_method IN ('apikey','sensor');
+  ON aston_tenant_identity_bindings(credential_id)
+  WHERE credential_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_aston_identity_tenant_status
   ON aston_tenant_identity_bindings(tenant_id, status);
 
