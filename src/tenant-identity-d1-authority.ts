@@ -57,7 +57,7 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
           SELECT b.tenant_id, b.auth_method, b.status AS membership_status,
                  b.capabilities_json, b.audiences_json, b.not_before AS membership_not_before,
                  b.expires_at AS membership_expires_at,
-                 t.status AS tenant_status, t.created_at AS tenant_not_before
+                 t.status AS tenant_status
           FROM aston_tenant_identity_bindings b
           JOIN aston_tenants t ON t.tenant_id = b.tenant_id
           WHERE b.auth_method = ? AND b.credential_id = ?
