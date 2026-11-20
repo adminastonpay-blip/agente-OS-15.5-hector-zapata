@@ -27,7 +27,7 @@ const activeRow = {
 test("resolves Access identity by verified issuer and subject, never by tenant claim", async () => {
   const db = fakeDb(activeRow);
   const result = await createD1TenantIdentityAuthority(db as never).resolve({
-    kind: "access", verified: true, issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
+    kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123", issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
   });
   assert.equal(result?.tenant.tenantId, "tenant-a");
   assert.deepEqual(result?.membership.capabilities, ["risk.read"]);
@@ -38,7 +38,7 @@ test("resolves Access identity by verified issuer and subject, never by tenant c
 test("resolves API credential only by full SHA-256 credential identifier", async () => {
   const db = fakeDb({ ...activeRow, auth_method: "apikey" });
   await createD1TenantIdentityAuthority(db as never).resolve({
-    kind: "api_key", verified: true, credentialId: `sha256:${"a".repeat(64)}`
+    kind: "api_key", verified: true, principalId: `apikey:sha256:${"a".repeat(64)}`, credentialId: `sha256:${"a".repeat(64)}`
   });
   assert.deepEqual(db.calls[0].slice(1), ["apikey", `sha256:${"a".repeat(64)}`]);
 });
@@ -46,7 +46,7 @@ test("resolves API credential only by full SHA-256 credential identifier", async
 test("rejects malformed credential fingerprint before querying D1", async () => {
   const db = fakeDb(activeRow);
   const result = await createD1TenantIdentityAuthority(db as never).resolve({
-    kind: "sensor", verified: true, credentialId: "sha256:short"
+    kind: "sensor", verified: true, principalId: "sensor:sha256:short", credentialId: "sha256:short"
   });
   assert.equal(result, null);
   assert.equal(db.calls.length, 0);
