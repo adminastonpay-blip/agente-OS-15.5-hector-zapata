@@ -32,6 +32,10 @@ async function keyFingerprint(key: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   return [...new Uint8Array(digest)].slice(0, 8).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+async function credentialFingerprint(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 async function verifyAccessJWT(jwt: string, env: Env): Promise<any | null> {
   try {
     const parts = jwt.split(".");
@@ -89,7 +93,7 @@ export async function authenticateWithContext(req: Request, env: Env): Promise<A
   const authorization = req.headers.get("Authorization") ?? "";
   const key = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (env.API_KEY && key && timingSafeEqual(key, env.API_KEY)) {
-    const credentialId = `sha256:${await keyFingerprint(key)}`;
+    const credentialId = `sha256:${await credentialFingerprint(key)}`;
     return {
       identity: { actor: `apikey:${await keyFingerprint(key)}`, method: "apikey", tenant: "default",
         roles: ["admin", "executor"], clearance: "confidential", plan: "sovereign" },
@@ -100,7 +104,7 @@ export async function authenticateWithContext(req: Request, env: Env): Promise<A
   if (env.API_KEY && sensorKey && timingSafeEqual(sensorKey, env.API_KEY)) {
     return {
       identity: { actor: "lb-sensor", method: "sensor", tenant: "ops", roles: ["sensor"], clearance: "secret", plan: "gov" },
-      principal: { kind: "sensor", verified: true, credentialId: `sha256:${await keyFingerprint(sensorKey)}`, tenantAuthority: "unresolved" },
+      principal: { kind: "sensor", verified: true, credentialId: `sha256:${await credentialFingerprint(sensorKey)}`, tenantAuthority: "unresolved" },
     };
   }
   return null;
