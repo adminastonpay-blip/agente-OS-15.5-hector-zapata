@@ -56,7 +56,7 @@ test("rejects legacy, unassigned and malformed tenant IDs", async () => {
   for (const tenant_id of ["default", "ops", "unassigned-user", "Tenant-A", "bad tenant"]) {
     const db = fakeDb({ ...activeRow, tenant_id });
     assert.equal(await createD1TenantIdentityAuthority(db as never).resolve({
-      kind: "access", verified: true, issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
+      kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123", issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
     }), null);
   }
 });
