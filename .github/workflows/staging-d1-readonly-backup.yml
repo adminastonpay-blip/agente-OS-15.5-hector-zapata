@@ -1,0 +1,105 @@
+name: ASTON staging D1 read-only inventory and backup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aston-staging-d1-readonly
+  cancel-in-progress: false
+
+jobs:
+  inventory-and-backup:
+    name: Read staging migration history and create backup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Enforce exact branch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REF" = "refs/heads/feat/aston-production-integration-v1" || {
+            echo "::error::This workflow may run only on feat/aston-production-integration-v1"
+            exit 1
+          }
+
+      - name: Checkout requested branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/aston-production-integration-v1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+
+      - name: Validate staging-only target and credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::Missing CLOUDFLARE_API_TOKEN repository secret"; exit 1; }
+          test "$CLOUDFLARE_ACCOUNT_ID" = "70e8821e0eeeccb401d9ba0b3f4dbfe8" || {
+            echo "::error::CLOUDFLARE_ACCOUNT_ID does not match the staging account in wrangler.staging.toml"
+            exit 1
+          }
+          grep -Fq 'name = "aston-os-21x-audit-staging"' wrangler.staging.toml
+          grep -Fq 'database_name = "aston-rag-staging-db"' wrangler.staging.toml
+          grep -Fq 'database_id = "457d72d6-388b-4dad-bdd0-b32d3e905e00"' wrangler.staging.toml
+          grep -Fq 'migrations_dir = "migrations-staging"' wrangler.staging.toml
+          mkdir -p staging-d1-evidence
+
+      - name: Install Wrangler dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Capture remote migration history (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list aston-rag-staging-db --remote --config wrangler.staging.toml 2>&1 | tee staging-d1-evidence/migration-history.txt
+
+      - name: Export remote staging database (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 export aston-rag-staging-db --remote --output=staging-d1-evidence/aston-staging-pre-migration.sql --config wrangler.staging.toml
+          test -s staging-d1-evidence/aston-staging-pre-migration.sql
+          grep -Eq 'CREATE TABLE|CREATE TABLE IF NOT EXISTS|CREATE INDEX' staging-d1-evidence/aston-staging-pre-migration.sql || {
+            echo "::error::Export exists but does not contain recognizable schema SQL; refusing to call it a valid backup."
+            exit 1
+          }
+
+      - name: Capture remote schema and migration ledger (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute aston-rag-staging-db --remote --config wrangler.staging.toml --command "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','index','trigger') ORDER BY type, name;" --json > staging-d1-evidence/remote-schema.json
+          npx wrangler d1 execute aston-rag-staging-db --remote --config wrangler.staging.toml --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('d1_migrations','_cf_KV')" --json > staging-d1-evidence/migration-ledger-discovery.json
+
+      - name: Generate backup integrity manifest
+        run: |
+          set -euo pipefail
+          (
+            cd staging-d1-evidence
+            sha256sum aston-staging-pre-migration.sql migration-history.txt remote-schema.json migration-ledger-discovery.json > SHA256SUMS.txt
+          )
+          test -s staging-d1-evidence/SHA256SUMS.txt
+          echo "Backup export is non-empty, contains SQL schema statements, and has a SHA-256 manifest."
+
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aston-staging-d1-readonly-evidence-${{ github.run_id }}
+          path: staging-d1-evidence/
+          if-no-files-found: error
+          retention-days: 30
