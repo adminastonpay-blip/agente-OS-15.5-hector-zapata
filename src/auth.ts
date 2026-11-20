@@ -83,7 +83,7 @@ export async function authenticateWithContext(req: Request, env: Env): Promise<A
         plan: normalizePlan(p.custom?.plan),
       };
       const principal = typeof p.iss === "string" && typeof p.sub === "string" && p.sub.length > 0
-        ? { kind: "access" as const, verified: true as const, issuer: p.iss, subject: p.sub,
+        ? { kind: "access" as const, verified: true as const, principalId: `access:${p.iss}:${p.sub}`, issuer: p.iss, subject: p.sub,
             tenantClaim: normalizeTenant(p.custom?.tenant), tenantAuthority: "unresolved" as const }
         : null;
       return { identity, principal };
@@ -97,14 +97,14 @@ export async function authenticateWithContext(req: Request, env: Env): Promise<A
     return {
       identity: { actor: `apikey:${await keyFingerprint(key)}`, method: "apikey", tenant: "default",
         roles: ["admin", "executor"], clearance: "confidential", plan: "sovereign" },
-      principal: { kind: "api_key", verified: true, credentialId, tenantAuthority: "unresolved" },
+      principal: { kind: "api_key", verified: true, principalId: `apikey:${credentialId}`, credentialId, tenantAuthority: "unresolved" },
     };
   }
   const sensorKey = req.headers.get("X-Sensor-Key");
   if (env.API_KEY && sensorKey && timingSafeEqual(sensorKey, env.API_KEY)) {
     return {
       identity: { actor: "lb-sensor", method: "sensor", tenant: "ops", roles: ["sensor"], clearance: "secret", plan: "gov" },
-      principal: { kind: "sensor", verified: true, credentialId: `sha256:${await credentialFingerprint(sensorKey)}`, tenantAuthority: "unresolved" },
+      principal: { kind: "sensor", verified: true, principalId: `sensor:sha256:${await credentialFingerprint(sensorKey)}`, credentialId: `sha256:${await credentialFingerprint(sensorKey)}`, tenantAuthority: "unresolved" },
     };
   }
   return null;
