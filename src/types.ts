@@ -50,8 +50,8 @@ export interface Identity {
  * Keep it separate from Identity because Identity is serialized into existing DO flows.
  */
 export type AuthenticatedPrincipal =
-  | { kind: "access"; verified: true; issuer: string; subject: string; tenantClaim: string | null; tenantAuthority: "unresolved" }
-  | { kind: "api_key" | "sensor"; verified: true; credentialId: string; tenantAuthority: "unresolved" };
+  | { kind: "access"; verified: true; principalId: string; issuer: string; subject: string; tenantClaim: string | null; tenantAuthority: "unresolved" }
+  | { kind: "api_key" | "sensor"; verified: true; principalId: string; credentialId: string; tenantAuthority: "unresolved" };
 
 export interface AuthenticatedContext {
   identity: Identity;
