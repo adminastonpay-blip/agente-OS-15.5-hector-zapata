@@ -39,7 +39,7 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
       if (!principal || principal.verified !== true) return null;
       let row: Record<string, unknown> | null;
       if (principal.kind === "access") {
-        if (!principal.issuer || !principal.subject) return null;
+        if (!principal.issuer || !principal.subject || principal.principalId !== `access:${principal.issuer}:${principal.subject}`) return null;
         row = await db.prepare(`
           SELECT b.tenant_id, b.auth_method, b.status AS membership_status,
                  b.capabilities_json, b.audiences_json, b.not_before AS membership_not_before,
@@ -53,6 +53,7 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
       } else {
         if (!/^sha256:[a-f0-9]{64}$/.test(principal.credentialId)) return null;
         const method = principal.kind === "api_key" ? "apikey" : "sensor";
+        if (principal.principalId !== `${method}:${principal.credentialId}`) return null;
         row = await db.prepare(`
           SELECT b.tenant_id, b.auth_method, b.status AS membership_status,
                  b.capabilities_json, b.audiences_json, b.not_before AS membership_not_before,
