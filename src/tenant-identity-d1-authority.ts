@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 
-type AccessPrincipal = { kind: "access"; verified: true; issuer: string; subject: string };
-type CredentialPrincipal = { kind: "api_key" | "sensor"; verified: true; credentialId: string };
+type AccessPrincipal = { kind: "access"; verified: true; principalId: string; issuer: string; subject: string };
+type CredentialPrincipal = { kind: "api_key" | "sensor"; verified: true; principalId: string; credentialId: string };
 export type VerifiedPrincipal = AccessPrincipal | CredentialPrincipal;
 
 export interface TenantIdentityAuthorityRecord {
@@ -44,7 +44,7 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
           SELECT b.tenant_id, b.auth_method, b.status AS membership_status,
                  b.capabilities_json, b.audiences_json, b.not_before AS membership_not_before,
                  b.expires_at AS membership_expires_at,
-                 t.status AS tenant_status, t.created_at AS tenant_not_before
+                 t.status AS tenant_status
           FROM aston_tenant_identity_bindings b
           JOIN aston_tenants t ON t.tenant_id = b.tenant_id
           WHERE b.auth_method = 'access' AND b.issuer = ? AND b.subject = ?
@@ -70,9 +70,7 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
       const audiences = parseStringArray(row.audiences_json);
       if (!capabilities || !audiences) return null;
       const membership: TenantIdentityAuthorityRecord["membership"] = {
-        tenantId: row.tenant_id, principalId: principal.kind === "access"
-          ? `access:${principal.issuer}:${principal.subject}`
-          : `${row.auth_method}:${principal.credentialId}`,
+        tenantId: row.tenant_id, principalId: principal.principalId,
         status: row.membership_status, capabilities, audiences,
       };
       if (typeof row.membership_not_before === "number") membership.notBefore = row.membership_not_before;
@@ -80,7 +78,6 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
       const tenant: TenantIdentityAuthorityRecord["tenant"] = {
         tenantId: row.tenant_id, status: row.tenant_status,
       };
-      if (typeof row.tenant_not_before === "number") tenant.notBefore = row.tenant_not_before;
       return { tenant, membership, authMethod: row.auth_method as TenantIdentityAuthorityRecord["authMethod"] };
     }
   });
