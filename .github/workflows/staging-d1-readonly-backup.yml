@@ -1,6 +1,13 @@
 name: ASTON staging D1 read-only inventory and backup
 
 on:
+  # GitHub only exposes workflow_dispatch for workflows present on the default branch.
+  # Keep this workflow isolated to the requested feature branch and trigger once on its workflow-file update.
+  push:
+    branches:
+      - feat/aston-production-integration-v1
+    paths:
+      - .github/workflows/staging-d1-readonly-backup.yml
   workflow_dispatch:
 
 permissions:
@@ -76,6 +83,19 @@ jobs:
             echo "::error::Export exists but does not contain recognizable schema SQL; refusing to call it a valid backup."
             exit 1
           }
+          python3 - <<'PY'
+          import pathlib, sqlite3, sys
+          dump = pathlib.Path("staging-d1-evidence/aston-staging-pre-migration.sql").read_text()
+          db = sqlite3.connect(":memory:")
+          try:
+              db.executescript(dump)
+              result = db.execute("PRAGMA integrity_check").fetchone()[0]
+              if result != "ok":
+                  raise SystemExit(f"SQLite integrity_check failed: {result}")
+              print("Backup SQL replayed successfully in an isolated in-memory SQLite database; integrity_check=ok")
+          finally:
+              db.close()
+          PY
 
       - name: Capture remote schema and migration ledger (read-only)
         env:
