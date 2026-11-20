@@ -26,7 +26,7 @@ const activeRow = {
 
 test("resolves Access identity by verified issuer and subject, never by tenant claim", async () => {
   const db = fakeDb(activeRow);
-  const result = await createD1TenantIdentityAuthority(db as never).resolve({
+  const result = await createD1TenantIdentityAuthority(db as never, { now: () => 500 }).resolve({
     kind: "access", verified: true, principalId: "access:https://team.cloudflareaccess.com:sub-123", issuer: "https://team.cloudflareaccess.com", subject: "sub-123"
   });
   assert.equal(result?.tenant.tenantId, "tenant-a");
