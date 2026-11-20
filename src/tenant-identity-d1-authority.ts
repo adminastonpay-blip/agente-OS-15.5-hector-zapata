@@ -31,8 +31,9 @@ function safeTenant(value: unknown): value is string {
  * Read-only D1 authority provider. It does not provision or mutate credentials.
  * Inputs must come from authenticateWithContext(), never request fields.
  */
-export function createD1TenantIdentityAuthority(db: D1Database) {
+export function createD1TenantIdentityAuthority(db: D1Database, options: { now?: () => number } = {}) {
   if (!db || typeof db.prepare !== "function") throw new TypeError("D1 database binding required");
+  const now = options.now ?? Date.now;
 
   return Object.freeze({
     async resolve(principal: VerifiedPrincipal): Promise<TenantIdentityAuthorityRecord | null> {
@@ -67,6 +68,13 @@ export function createD1TenantIdentityAuthority(db: D1Database) {
       }
       if (!row || !safeTenant(row.tenant_id) || typeof row.auth_method !== "string" ||
           typeof row.tenant_status !== "string" || typeof row.membership_status !== "string") return null;
+      // Authority is usable only when both lifecycle records are active and the
+      // membership time window is currently valid. Never return a suspended binding
+      // and rely on a downstream caller to remember to reject it.
+      const currentTime = now();
+      if (!Number.isFinite(currentTime) || row.tenant_status !== "active" || row.membership_status !== "active") return null;
+      if (typeof row.membership_not_before === "number" && currentTime < row.membership_not_before) return null;
+      if (typeof row.membership_expires_at === "number" && currentTime >= row.membership_expires_at) return null;
       const capabilities = parseStringArray(row.capabilities_json);
       const audiences = parseStringArray(row.audiences_json);
       if (!capabilities || !audiences) return null;
