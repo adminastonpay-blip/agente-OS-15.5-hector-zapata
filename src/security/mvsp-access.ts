@@ -12,8 +12,8 @@ const PUBLIC_READ_PATHS = new Set([
   "/v1/public/health",
 ]);
 
-// These POST routes are intentionally public and do not mutate tenant data,
-// policy, infrastructure, or agent execution state.
+// These POST routes are explicitly public. CISO intake is a narrow exception:
+// consent-bound, Turnstile-verified, encrypted, and isolated from tenant/policy state.
 const PUBLIC_POST_PATHS = new Set([
   "/chat", "/v1/chat", "/chat/stream", "/v1/chat/stream",
   "/v1/solve", "/v1/tts", "/v1/speech", "/v1/voice",
