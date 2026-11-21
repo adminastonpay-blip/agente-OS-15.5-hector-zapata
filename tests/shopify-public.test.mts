@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleEngineeringHealth, handleShopifyPublic } from "../src/routes/shopify-public.ts";
+import { handleEngineeringCisoLeads, handleEngineeringHealth, handleShopifyPublic } from "../src/routes/shopify-public.ts";
 
 const publicRequest = (path: string, method = "GET", body?: unknown) =>
   new Request("https://api.aston.example" + path, {
@@ -166,4 +166,66 @@ test("CISO lead intake rejects Turnstile responses for a different hostname", as
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("CISO lead inbox denies executor and non-admin identities", async () => {
+  const executor = { actor: "operator", method: "access", tenant: "aston", roles: ["executor"], clearance: "internal" };
+  const result = await handleEngineeringCisoLeads(
+    "/v1/engineering/leads/ciso",
+    new Request("https://api.aston.example/v1/engineering/leads/ciso"),
+    { DB: {} } as any,
+    executor as any,
+  );
+  assert.equal(result?.status, 403);
+});
+
+test("CISO lead inbox decrypts records only for verified admin", async () => {
+  const raw = new Uint8Array(32).fill(23);
+  const key = btoa(String.fromCharCode(...raw)).split("+").join("-").split("/").join("_").replace(/=+$/g, "");
+  const master = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+  const aes = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("aston-ciso-leads-v1"), info: new TextEncoder().encode("payload-encryption") },
+    master,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"],
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const payload = JSON.stringify({ name: "CISO Example", email: "security@example.com", company: "Example Corp" });
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("aston-ciso-lead:v1") },
+    aes,
+    new TextEncoder().encode(payload),
+  );
+  const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).split("+").join("-").split("/").join("_").replace(/=+$/g, "");
+  const admin = { actor: "admin", method: "access", tenant: "aston", roles: ["admin"], clearance: "secret" };
+  let limitBound = 0;
+  const env = {
+    LEADS_ENCRYPTION_KEY: key,
+    DB: {
+      prepare: (sql: string) => {
+        assert.match(sql, /ORDER BY created_at DESC LIMIT \\? OFFSET \\?/);
+        return {
+          bind: (...args: unknown[]) => {
+            limitBound = Number(args[1]);
+            return { all: async () => ({ results: [{
+              id: "lead-1", payload_ciphertext: encode(new Uint8Array(encrypted)),
+              payload_iv: encode(iv), created_at: 100, expires_at: 9999999999999,
+            }] }) };
+          },
+        };
+      },
+    },
+  };
+  const result = await handleEngineeringCisoLeads(
+    "/v1/engineering/leads/ciso",
+    new Request("https://api.aston.example/v1/engineering/leads/ciso?limit=500"),
+    env as any,
+    admin as any,
+  );
+  assert.equal(result?.status, 200);
+  const body = await result!.json() as any;
+  assert.equal(body.limit, 100);
+  assert.equal(limitBound, 100);
+  assert.equal(body.leads[0].email, "security@example.com");
 });
