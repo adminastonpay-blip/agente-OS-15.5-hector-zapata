@@ -4,7 +4,7 @@
 
 - `GET /v1/engineering/health`: private read-only D1 probe; requires a verified `admin` or `executor` identity.
 - `GET /v1/public/health`: allowlisted Shopify-origin bridge; returns only status, latency and timestamp.
-- `POST /v1/public/leads/ciso`: allowlisted, Turnstile-protected intake. Payload is AES-GCM encrypted before D1 insertion; an HMAC email digest supports private deduplication without storing plaintext email.
+- `POST /v1/public/leads/ciso`: allowlisted, Turnstile-protected intake. Payload is AES-GCM encrypted before D1 insertion; an HMAC email digest supports private deduplication without storing plaintext email.\n- `GET /v1/engineering/leads/ciso`: paginated PII retrieval restricted to verified `admin` identities (not executor); decrypts only in the private Worker boundary.
 
 ## Required configuration
 
