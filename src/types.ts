@@ -55,6 +55,12 @@ export interface Env {
   TURNSTILE_SECRET_KEY?: string;
   /** Base64url 32-byte key used for application-layer CISO lead encryption. */
   LEADS_ENCRYPTION_KEY?: string;
+  /** Exact HTTPS origins allowed to call the Shopify public gateway. */
+  SHOPIFY_ALLOWED_ORIGINS?: string;
+  /** Cloudflare Turnstile server-side verification secret. */
+  TURNSTILE_SECRET_KEY?: string;
+  /** Base64url 32-byte key used for application-layer CISO lead encryption. */
+  LEADS_ENCRYPTION_KEY?: string;
 }
 
 export interface Identity {
