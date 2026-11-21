@@ -53,3 +53,16 @@ A component is **verified operational** only when its owner, environment, route,
 ## Change boundaries
 
 This baseline is documentation-only. No Worker code, Cloudflare configuration, production secrets, live Shopify theme, or production deployment was changed.
+
+
+## D1 staging schema reconciliation — read-only snapshot (2026-11-21)
+
+A direct, read-only D1 SQL query against the database configured as `aston-rag-staging-db` returned **21 user tables** (excluding SQLite internals and Cloudflare's `_cf_KV` table). A separate `sqlite_master` check found no `d1_migrations` tracking table.
+
+The Cloudflare database-list metadata reported `num_tables: 0` for this same database, while the SQL catalog query returned the 21 tables. Treat the list metadata as stale/incomplete for schema readiness; the SQL catalog is the direct schema evidence.
+
+The staging repository configuration points to `migrations-staging/0001_staging_baseline.sql`. The live absence of `d1_migrations` does **not** prove that the baseline was never applied; it means Wrangler migration history is not currently evidenced by that conventional table. Do not apply or replay migrations automatically. Reconcile the deployed schema against the checked-in staging baseline and decide on a safe migration-history strategy in a reviewed change.
+
+A separate production naming discrepancy remains: `wrangler.toml` labels database ID `04ef0fcc-cf13-494c-8752-a300d6e6fe90` as `sos-db`, while Cloudflare's account inventory labels that same ID `db1`. This is a metadata/name mismatch, not evidence that the database ID is wrong. Do not rename or rebind it without an approved change.
+
+The Engineering health endpoint now performs a read-only schema catalog query after successful `SELECT 1`. It reports user-table count and whether `d1_migrations` exists separately from connectivity. A schema-inspection failure is diagnostic only and does not falsely mark a successful D1 connectivity probe as failed. No migration, data write, or production change was performed.
