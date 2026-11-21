@@ -204,7 +204,7 @@ test("CISO lead inbox decrypts records only for verified admin", async () => {
     LEADS_ENCRYPTION_KEY: key,
     DB: {
       prepare: (sql: string) => {
-        assert.match(sql, /ORDER BY created_at DESC LIMIT \\? OFFSET \\?/);
+        assert.equal(sql.includes("ORDER BY created_at DESC LIMIT ? OFFSET ?"), true);
         return {
           bind: (...args: unknown[]) => {
             limitBound = Number(args[1]);
