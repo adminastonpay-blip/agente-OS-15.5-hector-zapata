@@ -500,7 +500,10 @@ export default {
     const shopifyPublic = await handleShopifyPublic(path, req, env);
     if (shopifyPublic) return shopifyPublic;
 
-    const engineeringLeads = await handleEngineeringCisoLeads(path, req, env, identity);\n    if (engineeringLeads) return engineeringLeads;\n\n    const engineeringHealth = await handleEngineeringHealth(path, req, env, identity);
+    const engineeringLeads = await handleEngineeringCisoLeads(path, req, env, identity);
+    if (engineeringLeads) return engineeringLeads;
+
+    const engineeringHealth = await handleEngineeringHealth(path, req, env, identity);
     if (engineeringHealth) return engineeringHealth;
 
     const engineering = await handleEngineering(path, req, env, identity, json);
