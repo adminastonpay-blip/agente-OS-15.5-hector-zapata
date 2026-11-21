@@ -22,4 +22,4 @@ jobs:
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - name: Engineering API access, snapshot, D1 and resource inventory tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/engineering-overview.test.mts tests/engineering-health.test.mts
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/engineering-overview.test.mts tests/engineering-health.test.mts tests/engineering-resource-inventory.test.mts
