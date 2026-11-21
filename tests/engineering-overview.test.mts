@@ -27,7 +27,7 @@ test("reports bindings as configuration only and avoids health claims", async ()
   const body = await response?.json() as any;
   assert.equal(body.mode, "configuration_snapshot");
   assert.match(body.warning, /not proof of runtime health/i);
-  assert.equal(body.summary.configured, 4);
+  assert.equal(body.summary.configured, 5);
   assert.equal(body.resources.find((r: any) => r.id === "d1").configured, true);
   assert.equal(body.resources.find((r: any) => r.id === "vectorize").configured, false);
 });
