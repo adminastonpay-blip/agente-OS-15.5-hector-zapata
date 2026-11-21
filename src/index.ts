@@ -34,6 +34,7 @@ import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 
 import { handleStagingAudit } from "./audit/staging-endpoint";
+import { handleAuditLedger } from "./audit/ledger";
 import { isStagingRouteAllowed } from "./audit/staging-route-guard";
 import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
@@ -495,6 +496,9 @@ export default {
         version: VERSION,
       }, 503);
     }
+
+    const auditLedger = await handleAuditLedger(path, req, env, identity, json);
+    if (auditLedger) return auditLedger;
 
     const engineering = await handleEngineering(path, req, env, identity, json);
     if (engineering) return engineering;
