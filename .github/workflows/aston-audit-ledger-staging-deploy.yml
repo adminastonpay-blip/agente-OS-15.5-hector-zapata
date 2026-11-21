@@ -26,14 +26,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
-      - name: Guard deployment target and credentials
+      - name: Verify staging target
         run: |
           test "$ASTON_DEPLOY_TARGET" = "staging"
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN repository/environment secret"; exit 1; }
           grep -F 'name = "agente-os-15-5-hector-zapata-staging"' wrangler.toml
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - name: Audit ledger regression tests
         run: node --experimental-loader ./tests/ts-loader.mjs --test tests/audit-ledger.test.mts
+      - name: Verify Cloudflare deployment credential
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN repository/environment secret"; exit 1; }
       - name: Deploy only the isolated staging environment
         run: npx wrangler deploy --env staging
