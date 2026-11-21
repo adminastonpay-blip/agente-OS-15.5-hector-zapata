@@ -45,3 +45,21 @@ test("missing D1 is reported as unconfigured, not healthy", async () => {
   assert.equal(body.ok, false);
   assert.equal(body.checks[0].status, "unconfigured");
 });
+
+test("public identity cannot gain engineering access by carrying an admin role", async () => {
+  let probes = 0;
+  const env = { DB: { prepare: () => { probes++; return { first: async () => ({ health: 1 }) }; } } } as any;
+  const forgedRole = { ...admin, method: "public" } as any;
+  const response = await handleEngineering("/v1/engineering/health", new Request("https://x/v1/engineering/health"), env, forgedRole, json);
+  assert.equal(response?.status, 403);
+  assert.equal(probes, 0, "unauthorized requests must not touch D1");
+});
+
+test("authenticated executor can run the read-only health probe", async () => {
+  const executor = { actor: "operator-1", method: "access", tenant: "t1", roles: ["executor"], clearance: "confidential" } as any;
+  const env = { DB: { prepare: () => ({ first: async () => ({ health: 1 }) }) } } as any;
+  const response = await handleEngineering("/v1/engineering/health", new Request("https://x/v1/engineering/health"), env, executor, json);
+  assert.equal(response?.status, 200);
+  const body = await response?.json() as any;
+  assert.equal(body.checks[0].status, "ok");
+});
