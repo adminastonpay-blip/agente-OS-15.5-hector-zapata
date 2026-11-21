@@ -72,17 +72,24 @@ async function encryptLead(
 ): Promise<{ ciphertext: string; iv: string; emailHash: string } | null> {
   const raw = decodeKey(secret);
   if (!raw) return null;
-  const aesKey = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
+  const masterKey = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("aston-ciso-leads-v1"), info: new TextEncoder().encode("payload-encryption") },
+    masterKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"]
+  );
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("aston-ciso-lead:v1") },
     aesKey,
     new TextEncoder().encode(plaintext)
   );
-  const hmacKey = await crypto.subtle.importKey(
-    "raw",
-    raw,
-    { name: "HMAC", hash: "SHA-256" },
+  const hmacKey = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("aston-ciso-leads-v1"), info: new TextEncoder().encode("email-digest") },
+    masterKey,
+    { name: "HMAC", hash: "SHA-256", length: 256 },
     false,
     ["sign"]
   );
