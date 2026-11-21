@@ -86,3 +86,84 @@ test("engineering health allows authenticated executor and performs a real probe
   assert.equal(result?.status, 200);
   assert.equal(probes, 1);
 });
+
+test("CISO lead intake verifies Turnstile and stores encrypted PII only", async () => {
+  const originalFetch = globalThis.fetch;
+  let inserted: unknown[] | null = null;
+  let verificationCalls = 0;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    verificationCalls++;
+    const params = new URLSearchParams(String(init?.body || ""));
+    assert.equal(params.get("secret"), "turnstile-secret");
+    assert.equal(params.get("response"), "valid-token");
+    return Response.json({
+      success: true,
+      hostname: "m1m0d3-ru.myshopify.com",
+      action: "aston_ciso_lead",
+    });
+  };
+  try {
+    const rawKey = new Uint8Array(32).fill(19);
+    const key = btoa(String.fromCharCode(...rawKey)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    const env = publicEnv({
+      DB: {
+        prepare: (sql: string) => {
+          assert.match(sql, /INSERT INTO ciso_leads/);
+          return {
+            bind: (...values: unknown[]) => {
+              inserted = values;
+              return { run: async () => ({ success: true, meta: { changes: 1 } }) };
+            },
+          };
+        },
+      },
+      TURNSTILE_SECRET_KEY: "turnstile-secret",
+      LEADS_ENCRYPTION_KEY: key,
+    });
+    const req = publicRequest("/v1/public/leads/ciso", "POST", {
+      name: "CISO Example",
+      email: "security@example.com",
+      company: "Example Corp",
+      role: "CISO",
+      interest: "ASTON CONTROL",
+      message: "Solicito una demostración",
+      consent: true,
+      turnstile_token: "valid-token",
+    });
+    const result = await handleShopifyPublic("/v1/public/leads/ciso", req, env as any);
+    assert.equal(result?.status, 202);
+    assert.equal(verificationCalls, 1);
+    assert.ok(inserted);
+    assert.equal((inserted as unknown[]).length, 7);
+    assert.doesNotMatch(String((inserted as unknown[])[1]), /security@example.com/);
+    assert.doesNotMatch(String((inserted as unknown[])[2]), /security@example.com|CISO Example|Example Corp/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("CISO lead intake rejects Turnstile responses for a different hostname", async () => {
+  const originalFetch = globalThis.fetch;
+  let inserts = 0;
+  globalThis.fetch = async () => Response.json({
+    success: true,
+    hostname: "attacker.example",
+    action: "aston_ciso_lead",
+  });
+  try {
+    const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(3))).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    const env = publicEnv({
+      DB: { prepare: () => ({ bind: () => ({ run: async () => { inserts++; } }) }) },
+      TURNSTILE_SECRET_KEY: "turnstile-secret",
+      LEADS_ENCRYPTION_KEY: key,
+    });
+    const result = await handleShopifyPublic("/v1/public/leads/ciso", publicRequest("/v1/public/leads/ciso", "POST", {
+      name: "CISO Example", email: "security@example.com", company: "Example Corp",
+      consent: true, turnstile_token: "valid-token",
+    }), env as any);
+    assert.equal(result?.status, 403);
+    assert.equal(inserts, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
