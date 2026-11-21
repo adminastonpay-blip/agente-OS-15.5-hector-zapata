@@ -17,7 +17,7 @@ The lead route returns 503 until all required bindings/secrets exist. It does no
 
 ## D1 migration
 
-`migrations/0002_ciso_leads.sql` creates the encrypted lead table and indexes. It is a migration artifact only; it must be applied to the verified production D1 database during an approved release, not during PR review. Confirm the Worker `DB` binding points to the intended database before applying.
+`migrations-shopify/0001_ciso_leads.sql` creates the encrypted lead table and indexes. It is an isolated SQL artifact only; it is intentionally outside the shared Wrangler migration directory. Apply it with an explicit D1 execute command against the verified database during an approved release, not during PR review. Confirm the Worker `DB` binding points to the intended database before applying.
 
 ## Shopify theme wiring
 
