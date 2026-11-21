@@ -84,3 +84,32 @@ Evolve the existing ASTON COMMAND dashboard into a governed operator command cen
 ## 8. Change control
 
 This plan is committed to an isolated feature branch based on the existing dashboard feature branch. Do not merge to `main`, deploy, rotate secrets, run production migrations, or enable mutating operator controls without a separate explicit release approval and rollback plan.
+
+## 9. Verification snapshot — 2026-11-21
+
+**Candidate commit:** `ce5911aa74d037ce9ed21878d1828ad1de05e1cf`
+
+**GitHub Actions — verified successful**
+- Cloudflare CI workflow run `44869298223`: TypeScript check, AI Control Gate static guardrail, security regression tests, AI Control Gate red-team, Mission Token/anti-replay, Recovery Token Issuer, recovery action gate, recovery end-to-end chain, RAG tenant isolation, production Wrangler dry-run, and isolated staging Wrangler dry-run all completed successfully.
+- Secret Leak Scan run `44869298239`: success.
+- Dependency Vulnerability Audit run `44869298231`: success.
+
+**External Cloudflare deployment checks — unresolved**
+- `Workers Builds: agente-os-15-5-hector-zapata`: failed. GitHub check metadata does not expose the technical failure reason; inspect the linked Cloudflare build logs before changing configuration.
+- `Workers Builds: agente-os-15-5`: failed. The previously surfaced provider summary states that this Worker does not exist on the account. Confirm whether this legacy/secondary Worker is intended to be deployed before changing the integration.
+- A Wrangler dry-run passing validates bundle/configuration generation only. It is not evidence of a successful remote Worker build or deployment.
+
+**Pull request integration**
+- PR #55 was merged at commit `fd5667f357c892b6081b1b222c0d08d3678f4ea2`.
+- The follow-up commits `f48a05eb708ed4516d8685e5677acb41f9fec5b5` (CI trigger coverage) and `ce5911aa74d037ce9ed21878d1828ad1de05e1cf` (dashboard script string syntax fix) were created after that merge and require a separate integration review.
+
+## 10. RC1 release gate
+
+**Status: NOT READY — integration and external build blockers remain.**
+
+Before marking v0.6 RC1 ready:
+1. Integrate the two follow-up commits through a new reviewable pull request against the current dashboard integration branch; do not merge automatically.
+2. Inspect the failed primary Worker build logs and resolve the actual cause.
+3. Confirm with the project owner whether `agente-os-15-5` is an intended deployment target; do not create or rename remote Workers based on an assumed configuration.
+4. Re-run CI and confirm all required checks on the final candidate commit.
+5. Keep the dashboard read-only and preserve the no-production-deploy, no-secret-rotation, and no-migration boundaries until a separate release approval.
