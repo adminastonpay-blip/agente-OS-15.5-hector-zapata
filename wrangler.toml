@@ -17,7 +17,6 @@ binding = "AI"
 binding = "DB"
 database_name = "sos-db"
 database_id = "04ef0fcc-cf13-494c-8752-a300d6e6fe90"
-migrations_dir = "migrations"
 
 [[queues.producers]]
 binding = "ETL_QUEUE"
