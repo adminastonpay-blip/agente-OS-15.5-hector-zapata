@@ -19,6 +19,7 @@ const PUBLIC_POST_PATHS = new Set([
   "/v1/risk/score", "/v1/defense/triage", "/v1/constitution/check",
   "/v1/economy/quote", "/v1/crypto/identity", "/v1/crypto/sign",
   "/v1/validate",
+  "/v1/public/leads/ciso",
 ]);
 
 export type TrustedTenantPlan = "free" | "pro" | "sovereign" | "gov";
