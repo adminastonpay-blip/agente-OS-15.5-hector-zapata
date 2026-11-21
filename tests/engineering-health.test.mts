@@ -17,7 +17,7 @@ test("health endpoint requires privileged role", async () => {
 });
 
 test("D1 probe returns positive result only after SELECT 1 succeeds", async () => {
-  const env = { DB: { prepare: (sql: string) => ({ first: async () => ({ health: 1 }) }) } } as any;
+  const env = { DB: { prepare: (_sql: string) => ({ first: async () => ({ health: 1 }) }) } } as any;
   const response = await handleEngineering("/v1/engineering/health", new Request("https://x/v1/engineering/health"), env, admin as any, json);
   assert.equal(response?.status, 200);
   const body = await response?.json() as any;
@@ -92,4 +92,38 @@ test("schema inventory failure is diagnostic and does not erase successful D1 co
   assert.equal(body.ok, true);
   assert.equal(body.schema.status, "unavailable");
   assert.doesNotMatch(JSON.stringify(body), /schema details/);
+});
+
+test("incident feed requires privileged identity and never probes for public callers", async () => {
+  let probes = 0;
+  const env = { DB: { prepare: () => { probes++; return { first: async () => ({ health: 1 }) }; } } } as any;
+  const response = await handleEngineering("/v1/engineering/incidents", new Request("https://x/v1/engineering/incidents"), env, viewer as any, json);
+  assert.equal(response?.status, 403);
+  assert.equal(probes, 0);
+});
+
+test("incident feed derives a low severity migration-history observation without claiming history", async () => {
+  const env = { DB: { prepare: (sql: string) => ({ first: async () => sql.includes("sqlite_master")
+    ? ({ user_table_count: 21, migration_tracking_table: 0 })
+    : ({ health: 1 }) }) } } as any;
+  const response = await handleEngineering("/v1/engineering/incidents", new Request("https://x/v1/engineering/incidents"), env, admin as any, json);
+  const body = await response?.json() as any;
+  assert.equal(response?.status, 200);
+  assert.equal(body.mode, "derived_read_only_snapshot");
+  assert.equal(body.persistence, "not_persisted");
+  assert.equal(body.history_available, false);
+  assert.equal(body.write_operations, 0);
+  assert.equal(body.summary.low, 1);
+  assert.equal(body.incidents[0].type, "migration_history_unverified");
+  assert.match(body.incidents[0].evidence, /does not prove/);
+});
+
+test("incident feed classifies D1 connectivity failure as critical and redacts exception", async () => {
+  const env = { DB: { prepare: () => ({ first: async () => { throw new Error("secret db internals"); } }) } } as any;
+  const response = await handleEngineering("/v1/engineering/incidents", new Request("https://x/v1/engineering/incidents"), env, admin as any, json);
+  const body = await response?.json() as any;
+  assert.equal(response?.status, 200);
+  assert.equal(body.summary.critical, 1);
+  assert.equal(body.incidents[0].severity, "critical");
+  assert.doesNotMatch(JSON.stringify(body), /secret db internals/);
 });
