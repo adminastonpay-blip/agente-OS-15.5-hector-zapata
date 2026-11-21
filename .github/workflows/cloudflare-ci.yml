@@ -7,9 +7,11 @@ on:
       - feat/ai-control-gate
       - feat/rag-tenant-isolation
       - aston/centralized-inference-gate
+      - feat/aston-command-center-v0.6-integration
   pull_request:
     branches:
       - main
+      - feat/aston-command-dashboard-v1
   workflow_dispatch:
 
 permissions:
