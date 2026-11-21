@@ -15,6 +15,10 @@
 
 The lead route returns 503 until all required bindings/secrets exist. It does not fall back to Shopify contact storage or plaintext writes.
 
+## Current D1 finding
+
+The Worker production `DB` binding currently points to D1 database `sos-db` (ID `04ef0fcc-cf13-494c-8752-a300d6e6fe90`). A read-only schema inventory found only Cloudflare's internal `_cf_KV` table; no CISO lead table exists yet. The migration below is therefore a proposed additive schema, not an assertion that lead storage is already active.
+
 ## D1 migration
 
 `migrations-shopify/0001_ciso_leads.sql` creates the encrypted lead table and indexes. It is an isolated SQL artifact only; it is intentionally outside the shared Wrangler migration directory. Apply it with an explicit D1 execute command against the verified database during an approved release, not during PR review. Confirm the Worker `DB` binding points to the intended database before applying.
