@@ -156,3 +156,19 @@ DEPLOY_PROFILE = "21.6.3-cf-audit"
 name = "aston-recovery-workflow"
 binding = "RECOVERY_WORKFLOW"
 class_name = "RecoveryWorkflow"
+
+# Persistent, isolated staging Worker. No production routes or data bindings.
+[env.staging]
+name = "agente-os-15-5-hector-zapata-staging"
+workers_dev = true
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+DEPLOY_PROFILE = "21.6.3-cf-audit-staging"
+AUDIT_ENABLED = "true"
+AUDIT_ANCHOR_REQUIRED = "false"
+AUDIT_TEST_MODE = "false"
+
+[[env.staging.durable_objects.bindings]]
+name = "SAFETY"
+class_name = "SafetyInterlock"
