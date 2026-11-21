@@ -102,6 +102,17 @@ test("audit append uses trusted identity and the tenant hash-chain Durable Objec
   assert.equal("actor" in sent.payload, false);
 });
 
+test("optional ledger transport failure is reported as not persisted", async () => {
+  const env = {
+    SAFETY: {
+      idFromName: () => ({}),
+      get: () => ({ fetch: async () => { throw new Error("network unavailable"); } }),
+    },
+  } as unknown as Env;
+  const persisted = await appendTenantAuditEvent(env, admin, "decision.inferred", { rag: false });
+  assert.equal(persisted, false);
+});
+
 test("optional missing ledger reports not persisted; required ledger fails closed", async () => {
   const optional = await appendTenantAuditEvent({} as Env, admin, "decision.inferred", { rag: false });
   assert.equal(optional, false);
