@@ -84,3 +84,35 @@ The live D1 database `aston-rag-staging-db` (ID `457d72d6-388b-4dad-bdd0-b32d3e9
 **Decision:** schema shape is consistent with the staging baseline, but migration provenance is unverified and the database is shared with Preview. Do not run `wrangler d1 migrations apply`, do not apply the root `migrations/` directory to this database, and do not alter the D1 resource as part of audit staging. Any future migration work needs an independently approved, isolated database and a clean migration ledger.
 
 The inspection was metadata-only: no application table rows, secrets, or customer/business records were queried.
+
+
+## Workers Builds / automatic deployment verification — read-only, 2026-11-21
+
+Cloudflare Workers Builds API was queried for the live production Worker and the proposed audit-staging Worker. No configuration was changed and no build was started.
+
+### Production Worker
+
+- Live script: `agente-os-15-5-hector-zapata`; script tag `9bbbfc0fb267430a8a2aa9c450521965`.
+- A Workers Builds configuration **does exist** for this script tag.
+- Connected GitHub repository: `adminastonpay-blip/agente-OS-15.5-hector-zapata`, branch `main`.
+- Production deploy command: `npx wrangler deploy` from repository root. This uses the root Wrangler configuration, whose Worker name is the production Worker.
+- Production trigger includes branch `main`, all paths, and no branch exclusions.
+- `auto_build_enabled` is **false** in the retrieved Worker build configuration. This is evidence that automatic builds are currently disabled in that setting, not proof that no other deployment path exists.
+- Preview builds are enabled; their deploy command is `npx wrangler preview`, and the same repository connection/build token is referenced.
+- The API returned one production build trigger. A read-only deploy-hooks query returned an empty list for the production Worker.
+
+### Proposed audit-staging Worker
+
+- No Workers Builds configuration was found for `aston-os-21x-audit-staging` (Cloudflare returned 404).
+- No deploy hooks were returned for that name.
+- This is consistent with the earlier live Worker script inventory and direct Worker lookup: the audit-staging Worker is not currently present as a deployed script or configured Workers Build target in this account.
+
+### Release implications
+
+1. There is a configured production Workers Build connection on `main` with the default-root deploy command `npx wrangler deploy`. Although `auto_build_enabled=false` was returned, preserve this as a high-impact deployment path and do not alter it during staging work.
+2. The repository runbook's proposed audit-staging branch `feat/audit-staging-harness-21x` is not the production Builds branch. The production trigger is restricted to `main`, but its path include is `*`.
+3. The audit-staging deploy workflow remains manual-only, but its remote D1 migration step runs before its dry-run. It must remain undispatched until resource separation and migration provenance are resolved.
+4. No staging build configuration, deploy hook, or staging Worker currently exists according to the API queries. Do not create any as part of this investigation.
+5. This check did not inspect GitHub repository webhook settings, third-party CI secrets, external deploy services, or user-created API tokens. Therefore it cannot prove that no external deployment mechanism exists.
+
+**Decision:** production deployment configuration is now mapped sufficiently to avoid accidental edits: preserve the existing production Build configuration and its connection to `main`; keep the staging profile unconfigured until a separately approved, isolated design exists. No deployment, build, hook, token, secret, or infrastructure resource was created or modified.
