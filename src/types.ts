@@ -48,13 +48,7 @@ export interface Env {
   /** Comma-separated HTTPS origins allowed for recovery HEAD probes. Empty means deny all. */
   RECOVERY_ALLOWED_ORIGINS?: string;
   /** Base64url-encoded raw 32-byte Ed25519 public key; configure out-of-band. */
-  MISSION_TOKEN_PUBLIC_KEY?: string;\n  /** Exact HTTPS origins allowed to call the Shopify public gateway. */\n  SHOPIFY_ALLOWED_ORIGINS?: string;\n  /** Cloudflare Turnstile server-side verification secret. */\n  TURNSTILE_SECRET_KEY?: string;\n  /** Base64url 32-byte key used for application-layer CISO lead encryption. */\n  LEADS_ENCRYPTION_KEY?: string;
-  /** Exact HTTPS origins allowed to call the Shopify public gateway. */
-  SHOPIFY_ALLOWED_ORIGINS?: string;
-  /** Cloudflare Turnstile server-side verification secret. */
-  TURNSTILE_SECRET_KEY?: string;
-  /** Base64url 32-byte key used for application-layer CISO lead encryption. */
-  LEADS_ENCRYPTION_KEY?: string;
+  MISSION_TOKEN_PUBLIC_KEY?: string;
   /** Exact HTTPS origins allowed to call the Shopify public gateway. */
   SHOPIFY_ALLOWED_ORIGINS?: string;
   /** Cloudflare Turnstile server-side verification secret. */
