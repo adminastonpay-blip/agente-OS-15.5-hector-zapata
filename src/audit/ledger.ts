@@ -28,20 +28,24 @@ export async function appendTenantAuditEvent(
     throw new Error("audit_payload_too_large");
   }
   const stub = env.SAFETY.get(env.SAFETY.idFromName("audit:" + identity.tenant));
-  const response = await stub.fetch("https://safety.internal/audit/append", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      tenant: identity.tenant,
-      actor: identity.actor,
-      event_type: eventType,
-      payload,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await stub.fetch("https://safety.internal/audit/append", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenant: identity.tenant,
+        actor: identity.actor,
+        event_type: eventType,
+        payload,
+      }),
+    });
+  } catch {
+    if (env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_append_failed");
+    return false;
+  }
   if (!response.ok) {
-    if (env.AUDIT_ANCHOR_REQUIRED === "true") {
-      throw new Error("audit_append_failed");
-    }
+    if (env.AUDIT_ANCHOR_REQUIRED === "true") throw new Error("audit_append_failed");
     return false;
   }
   return true;
