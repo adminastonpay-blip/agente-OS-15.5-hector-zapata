@@ -121,6 +121,7 @@ async function verifyTurnstile(
   const result = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(10_000),
     body,
   });
   if (!result.ok) return false;
