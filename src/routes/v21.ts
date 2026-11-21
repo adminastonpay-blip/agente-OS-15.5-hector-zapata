@@ -3,6 +3,7 @@
  * Does not alter /chat contract.
  */
 import type { Env, Identity } from "../types";
+import { appendTenantAuditEvent } from "../audit/ledger";
 import { createObjectType, createObject, createLink, cascadeImpact } from "../ontology";
 import { emitLineage, getLineageTree } from "../lineage";
 import { maskForAgent } from "../pii";
@@ -317,24 +318,6 @@ export async function handleV21(
     return json({ ok: true, masked });
   }
 
-  if (path === "/v1/audit" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
-    if (env.DB) {
-      await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
-        .bind(Date.now(), body.action || "event", identity.actor, JSON.stringify(body.detail || body))
-        .run()
-        .catch(() => {});
-    }
-    if (env.JOURNAL) {
-      await env.JOURNAL.put(
-        `audit/${Date.now()}-${crypto.randomUUID()}.json`,
-        JSON.stringify({ ts: Date.now(), actor: identity.actor, body }),
-        { httpMetadata: { contentType: "application/json" } }
-      ).catch(() => {});
-    }
-    return json({ ok: true, persisted: { d1: !!env.DB, journal: !!env.JOURNAL } });
-  }
-
   if (path === "/v1/etl/enqueue" && req.method === "POST") {
     const body = await req.json<any>().catch(() => ({}));
     if (!env.ETL_QUEUE) {
@@ -399,13 +382,24 @@ export async function handleV21(
         ? [{ role: "user" as const, content: `Contexto:\n${context}\n\nPregunta: ${message}` }]
         : [{ role: "user" as const, content: message }]),
     ]);
-    if (env.DB) {
-      await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
-        .bind(Date.now(), "decide", identity.actor, JSON.stringify({ message: message.slice(0, 200) }))
-        .run()
-        .catch(() => {});
+    let auditPersisted = false;
+    try {
+      auditPersisted = await appendTenantAuditEvent(env, identity, "decision.inferred", {
+        model: out.model,
+        rag: !!context,
+        answer_length: String(out.response || "").length,
+      });
+    } catch {
+      return json({ ok: false, error: "audit_persistence_required" }, 503);
     }
-    return json({ ok: true, answer: out.response, model: out.model, rag: !!context, version: "21.0-edge" });
+    return json({
+      ok: true,
+      answer: out.response,
+      model: out.model,
+      rag: !!context,
+      version: "21.0-edge",
+      audit: { persisted: auditPersisted, ledger: "tenant_hash_chain" },
+    });
   }
 
   return null;
