@@ -65,3 +65,22 @@ Do not silently change the meaning of the existing Worker/config or reuse the sh
 ## Change boundary
 
 This branch adds documentation only. It does not alter `wrangler.toml`, `wrangler.staging.toml`, application code, migrations, production resources, Cloudflare bindings, queue consumers, secrets, or deployment settings.
+
+
+## D1 schema verification — read-only, 2026-11-21
+
+The live D1 database `aston-rag-staging-db` (ID `457d72d6-388b-4dad-bdd0-b32d3e905e00`) was queried through the Cloudflare D1 query API using SELECT against `sqlite_master` only. No business rows were read and no writes were performed.
+
+- The database contains the 21 application tables declared by `migrations-staging/0001_staging_baseline.sql`, plus SQLite/Cloudflare internal tables (`_cf_KV` and `sqlite_sequence`).
+- The live table definitions and named indexes inspected match the staging baseline, including:
+  - `documents.tenant TEXT NOT NULL DEFAULT ''`;
+  - `documents.index_status TEXT DEFAULT 'PENDING_VECTOR'`;
+  - `lineage_events.tenant TEXT NOT NULL`;
+  - the tenant/status indexes for documents and tenant/object/time index for lineage.
+- The later root migration files separately add `documents.tenant`, `documents.index_status`, and `lineage_events.tenant`. Those columns already exist in the live schema. Applying those additive root migrations to this same database would therefore risk duplicate-column failures.
+- A read-only lookup found no `d1_migrations` table in `sqlite_master`. The current schema can be compared with the baseline, but the migration ledger/history is not available in this database through that table. Do not infer which migration files Wrangler has recorded or replay them based only on matching schema.
+- The baseline's `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements would not reconcile a pre-existing table with a different shape. In this case, the inspected definitions match the baseline, but that does not establish migration history or prove the database is disposable/dedicated.
+
+**Decision:** schema shape is consistent with the staging baseline, but migration provenance is unverified and the database is shared with Preview. Do not run `wrangler d1 migrations apply`, do not apply the root `migrations/` directory to this database, and do not alter the D1 resource as part of audit staging. Any future migration work needs an independently approved, isolated database and a clean migration ledger.
+
+The inspection was metadata-only: no application table rows, secrets, or customer/business records were queried.
