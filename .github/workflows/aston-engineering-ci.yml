@@ -2,7 +2,7 @@ name: ASTON Engineering API CI
 
 on:
   push:
-    branches: ["feat/aston-engineering-readonly-api", "feat/aston-noc-d1-health-probe"]
+    branches: ["feat/aston-engineering-readonly-api", "feat/aston-noc-d1-health-probe", "feat/aston-noc-auth-regression-guards"]
   pull_request:
     branches: [main]
   workflow_dispatch:
