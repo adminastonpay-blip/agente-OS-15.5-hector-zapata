@@ -55,6 +55,12 @@ function encode(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function decode(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(normalized + "=".repeat((4 - (normalized.length % 4)) % 4));
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
 function decodeKey(value: string): Uint8Array | null {
   try {
     const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -229,7 +235,70 @@ export async function handleShopifyPublic(
   }
 }
 
-/** Private health probe for authenticated Engineering operators only. */
+
+async function decryptLead(
+  ciphertext: string,
+  iv: string,
+  secret: string
+): Promise<Record<string, unknown>> {
+  const raw = decodeKey(secret);
+  if (!raw) throw new Error("lead_encryption_key_invalid");
+  const masterKey = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("aston-ciso-leads-v1"), info: new TextEncoder().encode("payload-encryption") },
+    masterKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"]
+  );
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: decode(iv), additionalData: new TextEncoder().encode("aston-ciso-lead:v1") },
+    aesKey,
+    decode(ciphertext)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
+}
+
+/** PII retrieval is restricted to verified admin identities; executor is not sufficient. */
+export async function handleEngineeringCisoLeads(
+  path: string,
+  req: Request,
+  env: Env,
+  identity: Identity
+): Promise<Response | null> {
+  if (path !== "/v1/engineering/leads/ciso") return null;
+  if (req.method !== "GET") return response({ ok: false, error: "method_not_allowed" }, 405);
+  if (identity.method === "public" || !identity.roles.includes("admin")) {
+    return response({ ok: false, error: "engineering_admin_role_required" }, 403);
+  }
+  if (!env.DB || !env.LEADS_ENCRYPTION_KEY) {
+    return response({ ok: false, error: "lead_inbox_not_configured" }, 503);
+  }
+  const url = new URL(req.url);
+  const rawLimit = Number(url.searchParams.get("limit") || "25");
+  const rawOffset = Number(url.searchParams.get("offset") || "0");
+  const limit = Number.isInteger(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 25;
+  const offset = Number.isInteger(rawOffset) ? Math.min(10000, Math.max(0, rawOffset)) : 0;
+  try {
+    const result = await env.DB.prepare(
+      "SELECT id, payload_ciphertext, payload_iv, created_at, expires_at FROM ciso_leads WHERE expires_at > ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    ).bind(Date.now(), limit, offset).all<Record<string, unknown>>();
+    const leads = await Promise.all((result.results || []).map(async (row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      expires_at: row.expires_at,
+      ...(await decryptLead(
+        String(row.payload_ciphertext),
+        String(row.payload_iv),
+        env.LEADS_ENCRYPTION_KEY!
+      )),
+    })));
+    return response({ ok: true, count: leads.length, limit, offset, leads }, 200);
+  } catch {
+    return response({ ok: false, error: "lead_inbox_unavailable" }, 503);
+  }
+}
+\n/** Private health probe for authenticated Engineering operators only. */
 export async function handleEngineeringHealth(
   path: string,
   req: Request,
