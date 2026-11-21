@@ -23,9 +23,78 @@ export async function handleEngineering(
   identity: Identity,
   json: (data: unknown, status?: number) => Response
 ): Promise<Response | null> {
-  if (path !== "/v1/engineering/overview" && path !== "/v1/engineering/health") return null;
+  if (path !== "/v1/engineering/overview" && path !== "/v1/engineering/health" && path !== "/v1/engineering/incidents") return null;
   if (req.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
   if (!privileged(identity)) return json({ ok: false, error: "engineering_privileged_role_required" }, 403);
+
+  // Incident feed is derived from the same authenticated, read-only health probe.
+  // It is intentionally ephemeral: no D1 writes, incident history, or fake first_seen.
+  if (path === "/v1/engineering/incidents") {
+    const healthResponse = await handleEngineering("/v1/engineering/health", req, env, identity, json);
+    if (!healthResponse) return null;
+    const health = await healthResponse.json() as any;
+    const observedAt = typeof health.observed_at === "string" ? health.observed_at : new Date().toISOString();
+    const incidents: Array<{
+      event_id: string;
+      type: string;
+      severity: "critical" | "high" | "medium" | "low";
+      status: "open";
+      resource: string;
+      title: string;
+      evidence: string;
+      observed_at: string;
+      source: "engineering_health_probe";
+    }> = [];
+    const add = (type: string, severity: "critical" | "high" | "medium" | "low", resource: string, title: string, evidence: string) => {
+      incidents.push({
+        event_id: `aston:${type}:${resource}`,
+        type,
+        severity,
+        status: "open",
+        resource,
+        title,
+        evidence,
+        observed_at: observedAt,
+        source: "engineering_health_probe",
+      });
+    };
+
+    const d1 = Array.isArray(health.checks) ? health.checks.find((item: any) => item.id === "d1") : null;
+    if (d1?.status === "error") {
+      add("dependency_unavailable", "critical", "d1", "D1 connectivity probe failed", d1.evidence);
+    } else if (d1?.status === "unconfigured") {
+      add("dependency_unconfigured", "high", "d1", "D1 binding is not configured", d1.evidence);
+    }
+
+    if (d1?.status === "ok" && health.schema?.status === "empty") {
+      add("schema_empty", "high", "d1_schema", "D1 has no user tables", health.schema.evidence);
+    } else if (d1?.status === "ok" && health.schema?.status === "unavailable") {
+      add("schema_inspection_unavailable", "medium", "d1_schema", "D1 schema inventory could not be inspected", health.schema.evidence);
+    }
+    if (d1?.status === "ok" && health.schema?.status === "ok" && health.schema?.migration_tracking_table === false) {
+      add("migration_history_unverified", "low", "d1_schema", "Migration tracking table was not found", "This is an observation requiring reconciliation; it does not prove migrations were never applied.");
+    }
+
+    incidents.sort((a, b) => ["critical", "high", "medium", "low"].indexOf(a.severity) - ["critical", "high", "medium", "low"].indexOf(b.severity));
+    return json({
+      ok: true,
+      service: "ASTON NOC Incident Feed",
+      mode: "derived_read_only_snapshot",
+      observed_at: observedAt,
+      persistence: "not_persisted",
+      history_available: false,
+      write_operations: 0,
+      summary: {
+        total: incidents.length,
+        critical: incidents.filter((item) => item.severity === "critical").length,
+        high: incidents.filter((item) => item.severity === "high").length,
+        medium: incidents.filter((item) => item.severity === "medium").length,
+        low: incidents.filter((item) => item.severity === "low").length,
+      },
+      incidents,
+      note: "Incidents are derived from current read-only probes. Optional binding absence is not classified as an incident. No historical first_seen or acknowledgement state is implied.",
+    }, 200);
+  }
 
   if (path === "/v1/engineering/health") {
     const checks: Array<{ id: string; status: "ok" | "unconfigured" | "error"; latency_ms?: number; evidence: string }> = [];
