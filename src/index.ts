@@ -32,6 +32,7 @@ import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
 import { handleCommandDashboard } from "./dashboard/command";
+import { handleNetworkOverviewDashboard } from "./dashboard/network-overview";
 
 import { handleStagingAudit } from "./audit/staging-endpoint";
 import { isStagingRouteAllowed } from "./audit/staging-route-guard";
@@ -327,6 +328,9 @@ export default {
 
     const dashboardResponse = handleCommandDashboard(path);
     if (dashboardResponse) return dashboardResponse;
+
+    const networkDashboardResponse = handleNetworkOverviewDashboard(path);
+    if (networkDashboardResponse) return networkDashboardResponse;
 
     if (path === "/v1/etl/ingest" && req.method === "POST") {
       // ETL ingress is deliberately enabled only on the isolated staging Worker.
