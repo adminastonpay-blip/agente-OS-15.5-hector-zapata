@@ -6,6 +6,12 @@ const privileged = (identity: Identity) =>
   identity.method !== "public" &&
   (identity.roles.includes("admin") || identity.roles.includes("executor"));
 
+type BindingState = {
+  id: string;
+  status: "configured" | "unconfigured";
+  evidence: string;
+};
+
 /**
  * Read-only Engineering NOC snapshot.
  * Reports configuration/binding evidence only; never claims remote runtime health.
@@ -39,6 +45,34 @@ export async function handleEngineering(
         checks.push({ id: "d1", status: "error", latency_ms: Date.now() - started, evidence: "Probe failed; details intentionally omitted" });
       }
     }
+
+    // These are binding-presence observations, not active service probes.
+    // Keep each Durable Object class separate so a partial binding cannot look healthy.
+    const bindings: Array<[string, unknown]> = [
+      ["workers_ai", env.AI],
+      ["do_session_memory", env.SESSION],
+      ["do_graph_resolver", env.GRAPH],
+      ["do_supervisor", env.SUPERVISOR],
+      ["do_agent_node", env.AGENT],
+      ["do_simulation_twin", env.SIMULATION],
+      ["do_mission_brain", env.MISSION],
+      ["do_safety_interlock", env.SAFETY],
+      ["do_replay_guard", env.REPLAY_GUARD],
+      ["queue_etl", env.ETL_QUEUE],
+      ["queue_missions", env.MISSIONS],
+      ["vectorize", env.VECTORIZE],
+      ["r2_journal", env.JOURNAL],
+      ["r2_audit_archive", env.AUDIT_ARCHIVE],
+      ["hyperdrive", env.HYPERDRIVE],
+      ["recovery_workflow", env.RECOVERY_WORKFLOW],
+      ["ots_verifier", env.OTS_VERIFIER],
+    ];
+    const resources: BindingState[] = bindings.map(([id, binding]) => ({
+      id,
+      status: binding ? "configured" : "unconfigured",
+      evidence: binding ? "Binding present; remote/runtime health not probed" : "Binding absent in this deployment environment",
+    }));
+
     const d1 = checks[0].status;
     return json({
       ok: d1 === "ok",
@@ -46,7 +80,13 @@ export async function handleEngineering(
       mode: "read_only_probe",
       observed_at: new Date().toISOString(),
       checks,
-      note: "Only D1 is actively probed. Other resource entries represent binding presence, not live health.",
+      resource_summary: {
+        total: resources.length,
+        configured: resources.filter((item) => item.status === "configured").length,
+        unconfigured: resources.filter((item) => item.status === "unconfigured").length,
+      },
+      resources,
+      note: "D1 is actively probed with SELECT 1. All other resources report binding presence only, not live health.",
     }, d1 === "ok" ? 200 : 503);
   }
 
