@@ -9,16 +9,18 @@ const PUBLIC_READ_PATHS = new Set([
   "/v1/risk/status", "/v1/defense/status", "/v1/infra/status",
   "/v1/economy/status", "/v1/provenance/status", "/v1/sovereign/status",
   "/v1/sovereign/tenant", "/v1/crypto/pq", "/v1/ai/routes",
+  "/v1/public/health",
 ]);
 
-// These POST routes are intentionally public and do not mutate tenant data,
-// policy, infrastructure, or agent execution state.
+// These POST routes are explicitly public. CISO intake is a narrow exception:
+// consent-bound, Turnstile-verified, encrypted, and isolated from tenant/policy state.
 const PUBLIC_POST_PATHS = new Set([
   "/chat", "/v1/chat", "/chat/stream", "/v1/chat/stream",
   "/v1/solve", "/v1/tts", "/v1/speech", "/v1/voice",
   "/v1/risk/score", "/v1/defense/triage", "/v1/constitution/check",
   "/v1/economy/quote", "/v1/crypto/identity", "/v1/crypto/sign",
   "/v1/validate",
+  "/v1/public/leads/ciso",
 ]);
 
 export type TrustedTenantPlan = "free" | "pro" | "sovereign" | "gov";
