@@ -104,7 +104,7 @@ test("CISO lead intake verifies Turnstile and stores encrypted PII only", async 
   };
   try {
     const rawKey = new Uint8Array(32).fill(19);
-    const key = btoa(String.fromCharCode(...rawKey)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    const key = btoa(String.fromCharCode(...rawKey)).split("+").join("-").split("/").join("_").replace(/=+$/g, "");
     const env = publicEnv({
       DB: {
         prepare: (sql: string) => {
@@ -151,7 +151,7 @@ test("CISO lead intake rejects Turnstile responses for a different hostname", as
     action: "aston_ciso_lead",
   });
   try {
-    const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(3))).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(3))).split("+").join("-").split("/").join("_").replace(/=+$/g, "");
     const env = publicEnv({
       DB: { prepare: () => ({ bind: () => ({ run: async () => { inserts++; } }) }) },
       TURNSTILE_SECRET_KEY: "turnstile-secret",
