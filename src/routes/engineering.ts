@@ -29,6 +29,10 @@ export async function handleEngineering(
 
   if (path === "/v1/engineering/health") {
     const checks: Array<{ id: string; status: "ok" | "unconfigured" | "error"; latency_ms?: number; evidence: string }> = [];
+    let schema: { status: "ok" | "empty" | "unavailable" | "unconfigured"; user_table_count: number | null; migration_tracking_table: boolean | null; evidence: string } = {
+      status: "unconfigured", user_table_count: null, migration_tracking_table: null,
+      evidence: "D1 binding is absent; schema was not inspected",
+    };
     if (!env.DB) {
       checks.push({ id: "d1", status: "unconfigured", evidence: "D1 binding is absent" });
     } else {
@@ -43,6 +47,32 @@ export async function handleEngineering(
         });
       } catch {
         checks.push({ id: "d1", status: "error", latency_ms: Date.now() - started, evidence: "Probe failed; details intentionally omitted" });
+      }
+
+      if (checks[0].status === "ok") {
+        try {
+          const inventory = await env.DB.prepare(
+            "SELECT COUNT(*) AS user_table_count, SUM(CASE WHEN name = 'd1_migrations' THEN 1 ELSE 0 END) AS migration_tracking_table FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_cf_KV'"
+          ).first<{ user_table_count: number; migration_tracking_table: number }>();
+          const count = Number(inventory?.user_table_count);
+          if (Number.isFinite(count)) {
+            const hasMigrations = Number(inventory?.migration_tracking_table) > 0;
+            schema = {
+              status: count > 0 ? "ok" : "empty",
+              user_table_count: count,
+              migration_tracking_table: hasMigrations,
+              evidence: hasMigrations
+                ? "Read-only sqlite_master inventory completed; D1 migration tracking table is present"
+                : "Read-only sqlite_master inventory completed; D1 migration tracking table was not found",
+            };
+          } else {
+            schema = { status: "unavailable", user_table_count: null, migration_tracking_table: null, evidence: "Schema inventory returned no usable count" };
+          }
+        } catch {
+          schema = { status: "unavailable", user_table_count: null, migration_tracking_table: null, evidence: "Schema inventory failed; details intentionally omitted" };
+        }
+      } else {
+        schema = { status: "unavailable", user_table_count: null, migration_tracking_table: null, evidence: "Schema inventory skipped because the D1 connectivity probe failed" };
       }
     }
 
@@ -80,6 +110,7 @@ export async function handleEngineering(
       mode: "read_only_probe",
       observed_at: new Date().toISOString(),
       checks,
+      schema,
       resource_summary: {
         total: resources.length,
         configured: resources.filter((item) => item.status === "configured").length,
