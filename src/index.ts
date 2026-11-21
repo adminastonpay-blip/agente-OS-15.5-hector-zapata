@@ -28,6 +28,7 @@ import { handleFactory } from "./routes/factory";
 import { handleDefense } from "./routes/defense";
 import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
+import { handleEngineering } from "./routes/engineering";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
@@ -494,6 +495,9 @@ export default {
         version: VERSION,
       }, 503);
     }
+
+    const engineering = await handleEngineering(path, req, env, identity, json);
+    if (engineering) return engineering;
 
     const risk = await handleRisk(path, req, env, identity, json);
     if (risk) return risk;

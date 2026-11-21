@@ -1,0 +1,25 @@
+name: ASTON Engineering API CI
+
+on:
+  push:
+    branches: ["feat/aston-engineering-readonly-api"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - name: Engineering API access and snapshot tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/engineering-overview.test.mts
