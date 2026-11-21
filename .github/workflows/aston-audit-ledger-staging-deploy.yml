@@ -1,0 +1,39 @@
+name: ASTON isolated staging deployment
+
+on:
+  push:
+    branches: ["deploy/aston-audit-ledger-staging"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aston-audit-ledger-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: staging
+    env:
+      ASTON_DEPLOY_TARGET: staging
+      CLOUDFLARE_ACCOUNT_ID: 70e8821e0eeeccb401d9ba0b3f4dbfe8
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+      - name: Guard deployment target and credentials
+        run: |
+          test "$ASTON_DEPLOY_TARGET" = "staging"
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN repository/environment secret"; exit 1; }
+          grep -F 'name = "agente-os-15-5-hector-zapata-staging"' wrangler.toml
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - name: Audit ledger regression tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/audit-ledger.test.mts
+      - name: Deploy only the isolated staging environment
+        run: npx wrangler deploy --env staging
