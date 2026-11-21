@@ -2,7 +2,7 @@ name: ASTON Engineering API CI
 
 on:
   push:
-    branches: ["feat/aston-engineering-readonly-api", "feat/aston-noc-d1-health-probe", "feat/aston-noc-auth-regression-guards", "feat/aston-noc-resource-inventory", "feat/aston-noc-d1-schema-observability"]
+    branches: ["feat/aston-engineering-readonly-api", "feat/aston-noc-d1-health-probe", "feat/aston-noc-auth-regression-guards", "feat/aston-noc-resource-inventory", "feat/aston-noc-d1-schema-observability", "feat/aston-noc-incident-feed"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -21,5 +21,5 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm run check
-      - name: Engineering API access, snapshot, D1 and resource inventory tests
+      - name: Engineering API access, snapshot, D1, resource inventory and incident feed tests
         run: node --experimental-loader ./tests/ts-loader.mjs --test tests/engineering-overview.test.mts tests/engineering-health.test.mts tests/engineering-resource-inventory.test.mts
