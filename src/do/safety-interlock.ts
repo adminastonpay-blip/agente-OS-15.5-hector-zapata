@@ -157,12 +157,62 @@ export class SafetyInterlock {
     }
     if (u.pathname === "/audit/append" && req.method === "POST") {
       const body = await req.json<{ tenant: string; actor: string; event_type: string; payload?: Record<string, unknown> }>().catch(() => null);
-      const allowedEvents = new Set(["agent.plan.created", "agent.plan.rejected", "agent.plan.approved", "agent.plan.rejected_by_human", "agent.action.executed", "agent.action.blocked"]);
+      const allowedEvents = new Set(["agent.plan.created", "agent.plan.rejected", "agent.plan.approved", "agent.plan.rejected_by_human", "agent.action.executed", "agent.action.blocked", "decision.inferred"]);
       if (!body || !/^[a-zA-Z0-9_-]{1,64}$/.test(body.tenant) || typeof body.actor !== "string" || !body.actor || body.actor.length > 128 || !allowedEvents.has(body.event_type) || !body.payload || typeof body.payload !== "object" || Array.isArray(body.payload)) {
         return Response.json({ ok: false, error: "invalid_audit_event" }, { status: 400 });
       }
       await this.appendAuditEvent(body.tenant, body.actor, body.event_type, body.payload);
       return Response.json({ ok: true, recorded: true });
+    }
+
+    if (u.pathname === "/audit/list" && req.method === "GET") {
+      const tenant = u.searchParams.get("tenant") || "";
+      const limit = Number(u.searchParams.get("limit") || 50);
+      const beforeId = Number(u.searchParams.get("before_id") || Number.MAX_SAFE_INTEGER);
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tenant) ||
+          !Number.isInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isSafeInteger(beforeId) || beforeId < 1) {
+        return Response.json({ ok: false, error: "invalid_audit_list_query" }, { status: 400 });
+      }
+      const rows = this.sql.exec(
+        `SELECT id, ts, actor, event_type, record_json, previous_hash, event_hash
+         FROM audit_events WHERE tenant = ? AND id < ? ORDER BY id DESC LIMIT ?`,
+        tenant, beforeId, limit
+      ).toArray() as any[];
+      const events = rows.map((row) => {
+        let payloadFields: string[] = [];
+        let recordParseOk = false;
+        try {
+          const record = JSON.parse(String(row.record_json));
+          const payload = record && typeof record.payload === "object" && record.payload && !Array.isArray(record.payload)
+            ? record.payload : {};
+          payloadFields = Object.keys(payload).sort();
+          recordParseOk = true;
+        } catch {
+          payloadFields = [];
+        }
+        return {
+          id: Number(row.id),
+          event_id: `audit-${Number(row.id)}`,
+          ts: Number(row.ts),
+          actor: String(row.actor),
+          event_type: String(row.event_type),
+          previous_hash: String(row.previous_hash),
+          event_hash: String(row.event_hash),
+          payload_fields: payloadFields,
+          record_parse_ok: recordParseOk,
+        };
+      });
+      const pageLinksValid = events.every((event, index) =>
+        index === 0 || events[index - 1].previous_hash === event.event_hash
+      );
+      return Response.json({
+        ok: true,
+        events,
+        next_before_id: rows.length === limit ? Number(rows[rows.length - 1].id) : null,
+        page_chain_links_valid: pageLinksValid,
+        integrity_scope: "links_between_returned_events_only",
+      });
     }
 
     if (u.pathname === "/audit/anchor/verify" && req.method === "POST") {
