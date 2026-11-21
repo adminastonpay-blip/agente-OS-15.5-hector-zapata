@@ -11,12 +11,12 @@ test("does not handle unrelated paths", async () => {
 });
 
 test("rejects non-GET requests", async () => {
-  const response = await handleEngineering("/v1/engineering/overview", new Request("https://x/v1/engineering/overview", { method: "POST" }), {} as any, {} as any, admin as any, json);
+  const response = await handleEngineering("/v1/engineering/overview", new Request("https://x/v1/engineering/overview", { method: "POST" }), {} as any, admin as any, json);
   assert.equal(response?.status, 405);
 });
 
 test("requires privileged engineering role", async () => {
-  const response = await handleEngineering("/v1/engineering/overview", new Request("https://x/v1/engineering/overview"), {} as any, {} as any, viewer as any, json);
+  const response = await handleEngineering("/v1/engineering/overview", new Request("https://x/v1/engineering/overview"), {} as any, viewer as any, json);
   assert.equal(response?.status, 403);
 });
 
@@ -27,7 +27,7 @@ test("reports bindings as configuration only and avoids health claims", async ()
   const body = await response?.json() as any;
   assert.equal(body.mode, "configuration_snapshot");
   assert.match(body.warning, /not proof of runtime health/i);
-  assert.equal(body.summary.configured, 5);
+  assert.equal(body.summary.configured, 4);
   assert.equal(body.resources.find((r: any) => r.id === "d1").configured, true);
   assert.equal(body.resources.find((r: any) => r.id === "vectorize").configured, false);
 });
