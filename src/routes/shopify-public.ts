@@ -298,7 +298,8 @@ export async function handleEngineeringCisoLeads(
     return response({ ok: false, error: "lead_inbox_unavailable" }, 503);
   }
 }
-\n/** Private health probe for authenticated Engineering operators only. */
+
+/** Private health probe for authenticated Engineering operators only. */
 export async function handleEngineeringHealth(
   path: string,
   req: Request,
