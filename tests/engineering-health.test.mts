@@ -63,3 +63,33 @@ test("authenticated executor can run the read-only health probe", async () => {
   const body = await response?.json() as any;
   assert.equal(body.checks[0].status, "ok");
 });
+
+test("D1 schema inventory reports table count and migration tracking separately", async () => {
+  const env = { DB: { prepare: (sql: string) => ({
+    first: async () => sql.includes("sqlite_master")
+      ? ({ user_table_count: 21, migration_tracking_table: 0 })
+      : ({ health: 1 }),
+  }) } } as any;
+  const response = await handleEngineering("/v1/engineering/health", new Request("https://x/v1/engineering/health"), env, admin as any, json);
+  const body = await response?.json() as any;
+  assert.equal(response?.status, 200);
+  assert.equal(body.schema.status, "ok");
+  assert.equal(body.schema.user_table_count, 21);
+  assert.equal(body.schema.migration_tracking_table, false);
+  assert.match(body.schema.evidence, /not found/);
+});
+
+test("schema inventory failure is diagnostic and does not erase successful D1 connectivity", async () => {
+  const env = { DB: { prepare: (sql: string) => ({
+    first: async () => {
+      if (sql.includes("sqlite_master")) throw new Error("schema details");
+      return { health: 1 };
+    },
+  }) } } as any;
+  const response = await handleEngineering("/v1/engineering/health", new Request("https://x/v1/engineering/health"), env, admin as any, json);
+  const body = await response?.json() as any;
+  assert.equal(response?.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.schema.status, "unavailable");
+  assert.doesNotMatch(JSON.stringify(body), /schema details/);
+});
