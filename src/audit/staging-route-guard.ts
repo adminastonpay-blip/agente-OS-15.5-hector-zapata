@@ -7,6 +7,10 @@ const STAGING_ALLOWED_PATHS = new Set([
   // RAG is enabled only on the isolated staging Worker for tenant-isolation validation.
   "/v1/rag/ingest",
   "/v1/rag/query",
+  // Read-only dashboard and its static assets are safe in isolated previews.
+  "/command",
+  "/command.css",
+  "/command.js",
 ]);
 
 /**
