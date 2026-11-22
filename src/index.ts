@@ -55,11 +55,10 @@ export {
 
 const VERSION = "21.6.3-cf-audit";
 
+// Cross-origin access is denied by default. Add a request-scoped exact-origin
+// allowlist only after the production and storefront origins have been verified.
 const CORS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers":
-    "Content-Type,Authorization,Accept,X-Aston-Tenant,X-Aston-Plan,X-Sensor-Key,X-Payment,X-402-Payment,X-Aston-Free,X-Require-Payment",
+  "Vary": "Origin",
 };
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -237,7 +236,7 @@ async function handleTts(req: Request, env: Env, identity: Awaited<ReturnType<ty
     if (binary) {
       return new Response(binary, {
         status: 200,
-        headers: { ...CORS, "Content-Type": "audio/mpeg", "X-ASTON-TTS-Model": model },
+        headers: { ...CORS, ...SECURITY_HEADERS, "Content-Type": "audio/mpeg", "X-ASTON-TTS-Model": model },
       });
     }
     return json({ ok: true, model, audio: raw, format: "unknown" });
@@ -269,6 +268,7 @@ async function handleVoice(req: Request, env: Env, identity: Awaited<ReturnType<
         status: 200,
         headers: {
           ...CORS,
+          ...SECURITY_HEADERS,
           "Content-Type": "audio/mpeg",
           "X-ASTON-TTS-Model": model,
           "X-ASTON-Voice-Profile": profile.id,
@@ -286,7 +286,7 @@ async function handleVoice(req: Request, env: Env, identity: Awaited<ReturnType<
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...CORS, ...SECURITY_HEADERS } });
 
     const u = new URL(req.url);
     const path = u.pathname.replace(/\/+$/, "") || "/";
