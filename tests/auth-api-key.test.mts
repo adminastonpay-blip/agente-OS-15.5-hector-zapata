@@ -16,6 +16,14 @@ test("shared API key authenticates only as an unassigned machine identity", asyn
   assert.deepEqual(identity.roles, ["service"]);
   assert.equal(identity.plan, undefined);
   assert.notEqual(identity.clearance, "secret");
+  assert.deepEqual(
+    authorizeApiRequest(new Request("https://aston.test/private"), "/private", identity),
+    { allowed: false, status: 403, error: "tenant_assignment_required" },
+  );
+  assert.deepEqual(
+    authorizeApiRequest(new Request("https://aston.test/private", { method: "POST" }), "/private", identity),
+    { allowed: false, status: 403, error: "tenant_assignment_required" },
+  );
 });
 
 test("sensor credential has no operator privilege or tenant assignment", async () => {
