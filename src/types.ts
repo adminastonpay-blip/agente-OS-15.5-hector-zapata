@@ -20,6 +20,8 @@ export interface Env {
 
   // Optional platform resources
   DB?: D1Database;
+  /** Optional Analytics Engine sink for privacy-safe request spans and metrics. */
+  OBSERVABILITY?: AnalyticsEngineDataset;
   VECTORIZE?: VectorizeIndex;
   JOURNAL?: R2Bucket;
   /** Dedicated Object-Locked R2 bucket for external audit checkpoints and OTS receipts. */

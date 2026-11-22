@@ -39,6 +39,7 @@ import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
 import { checkRequestRateLimit, enforceRequestBodyLimit } from "./security/request-guard";
 import { sessionStorageKey } from "./security/session-key";
+import { withRequestSpan } from "./observability/request-span";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -284,8 +285,7 @@ async function handleVoice(req: Request, env: Env, identity: Awaited<ReturnType<
   }
 }
 
-export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+async function handleRequest(req: Request, env: Env): Promise<Response> {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
     const u = new URL(req.url);
@@ -527,6 +527,11 @@ export default {
     if (v21) return v21;
 
     return json({ error: "not found", version: VERSION }, 404);
+}
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    return withRequestSpan(req, env, () => handleRequest(req, env));
   },
   // ETL queue processing is wired here; queue consumers remain explicitly configured
   // per environment so this change does not activate production consumption.
