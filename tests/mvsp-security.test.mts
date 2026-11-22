@@ -25,6 +25,31 @@ test("keeps explicitly public health and chat routes available", () => {
   assert.deepEqual(authorizeApiRequest(request("POST", "/v1/chat"), "/v1/chat", publicIdentity), { allowed: true });
 });
 
+test("keeps Command Center capability status routes explicitly public", () => {
+  for (const path of [
+    "/command",
+    "/command.css",
+    "/command.js",
+    "/v1/risk/status",
+    "/v1/defense/status",
+    "/v1/infra/status",
+    "/v1/provenance/status",
+  ]) {
+    assert.deepEqual(
+      authorizeApiRequest(request("GET", path), path, publicIdentity),
+      { allowed: true },
+      path
+    );
+  }
+});
+
+test("keeps incident records private to authenticated identities", () => {
+  assert.deepEqual(
+    authorizeApiRequest(request("GET", "/v1/defense/incidents"), "/v1/defense/incidents", publicIdentity),
+    { allowed: false, status: 401, error: "authentication_required" }
+  );
+});
+
 test("requires authentication for private reads", () => {
   assert.deepEqual(
     authorizeApiRequest(request("GET", "/v1/audit"), "/v1/audit", publicIdentity),
