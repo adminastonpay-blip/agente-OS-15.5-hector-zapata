@@ -83,7 +83,7 @@ test("writes low-cardinality Analytics Engine metrics without blocking the respo
   const request = new Request("https://aston.invalid/v1/risk/assess?customer=private", { method: "POST" });
   const { response } = await captureLogs(() => withRequestSpan(
     request,
-    { OBSERVABILITY: { writeDataPoint: (point) => points.push(point) } },
+    { OBSERVABILITY: { writeDataPoint: (point) => { if (point) points.push(point); } } },
     async () => new Response("accepted", { status: 202 }),
   ));
   assert.equal(response.status, 202);

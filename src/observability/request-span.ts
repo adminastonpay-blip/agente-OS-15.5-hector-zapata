@@ -5,13 +5,13 @@
  */
 
 export interface AnalyticsPoint {
-  blobs?: Array<string | null>;
-  doubles?: Array<number | null>;
-  indexes?: Array<string | null>;
+  blobs?: string[];
+  doubles?: number[];
+  indexes?: string[];
 }
 
 export interface AnalyticsSink {
-  writeDataPoint(point: AnalyticsPoint): void;
+  writeDataPoint(point?: AnalyticsPoint): void;
 }
 
 export interface RequestSpanEnv {
