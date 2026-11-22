@@ -7,10 +7,10 @@ test("allows ordinary Spanish chat responses", () => {
   assert.equal(isOutputSafeForCredentialLeak("Hola. ¿En qué puedo ayudarte hoy?"), true);
 });
 test("blocks PEM private-key headers", () => {
-  assert.equal(isOutputSafeForCredentialLeak("-----BEGIN PRIVATE KEY-----\nabc"), false);
+  assert.equal(isOutputSafeForCredentialLeak("-----BEGIN PRIVATE KEY-----\\nabc"), false);
 });
 test("blocks AWS access-key identifiers", () => {
-  // Construct a synthetic key at runtime so secret scanners do not mistake the test fixture for a credential.
+  // Construct a synthetic key at runtime so secret scanners do not mistake the fixture for a credential.
   const syntheticAwsKey = ["AKIA", "1234567890ABCDEF"].join("");
   assert.equal(isOutputSafeForCredentialLeak(`Credencial: ${syntheticAwsKey}`), false);
 });
@@ -27,12 +27,12 @@ test("does not reject short ordinary identifiers", () => {
 test("keeps production routing unchanged", () => {
   assert.equal(isStagingRouteAllowed("21.6.3-cf-audit", "/v1/tts"), true);
 });
-test("allows only health and authenticated audit routes in staging", () => {
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/"), true);
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/health"), true);
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/v1/audit-target"), true);
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/v1/audit-target/"), true);
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/chat"), false);
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/v1/tts"), false);
-  assert.equal(isStagingRouteAllowed("21.6.3-audit-staging", "/v1/validate"), false);
+test("audit staging allows only health and explicitly approved audit routes", () => {
+  const profile = "21.6.3-audit-staging";
+  for (const path of ["/", "/health", "/v1/audit-target", "/v1/audit-target/", "/v1/audit/anchor/verify"]) {
+    assert.equal(isStagingRouteAllowed(profile, path), true, `expected ${path} to be allowed`);
+  }
+  for (const path of ["/chat", "/v1/tts", "/v1/validate", "/v1/etl/ingest", "/v1/rag/ingest", "/v1/rag/query", "/v1/solve"]) {
+    assert.equal(isStagingRouteAllowed(profile, path), false, `expected ${path} to be denied`);
+  }
 });
