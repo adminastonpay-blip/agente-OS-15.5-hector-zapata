@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { authenticate } from "../src/auth.ts";
+import { authorizeApiRequest } from "../src/security/mvsp-access.ts";
 
 test("shared API key authenticates only as an unassigned machine identity", async () => {
   const identity = await authenticate(
