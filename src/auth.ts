@@ -100,13 +100,15 @@ export async function authenticate(req: Request, env: Env): Promise<Identity | n
   const authorization = req.headers.get("Authorization") ?? "";
   const key = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (env.API_KEY && key && timingSafeEqual(key, env.API_KEY)) {
+    const fingerprint = await keyFingerprint(key);
     return {
-      actor: `apikey:${await keyFingerprint(key)}`,
+      actor: `service:${fingerprint}`,
       method: "apikey",
-      tenant: "default",
-      roles: ["admin", "executor"],
-      clearance: "confidential",
-      plan: "sovereign",
+      // A shared API key is a machine credential, never a human operator identity.
+      // It receives no tenant assignment or privileged role by default.
+      tenant: `unassigned-machine-${fingerprint}`,
+      roles: ["service"],
+      clearance: "internal",
     };
   }
 
@@ -116,10 +118,9 @@ export async function authenticate(req: Request, env: Env): Promise<Identity | n
     return {
       actor: "lb-sensor",
       method: "sensor",
-      tenant: "ops",
+      tenant: "unassigned-sensor",
       roles: ["sensor"],
-      clearance: "secret",
-      plan: "gov",
+      clearance: "internal",
     };
   }
   return null;
