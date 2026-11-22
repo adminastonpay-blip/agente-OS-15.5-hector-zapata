@@ -79,6 +79,9 @@ export function authorizeApiRequest(
     if (identity.method === "public") {
       return { allowed: false, status: 401, error: "authentication_required" };
     }
+    if (identity.tenant.startsWith("unassigned-")) {
+      return { allowed: false, status: 403, error: "tenant_assignment_required" };
+    }
     return { allowed: true };
   }
 
@@ -89,6 +92,9 @@ export function authorizeApiRequest(
   if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") {
     if (identity.method === "public") {
       return { allowed: false, status: 401, error: "authentication_required" };
+    }
+    if (identity.tenant.startsWith("unassigned-")) {
+      return { allowed: false, status: 403, error: "tenant_assignment_required" };
     }
     if (!isPrivileged(identity)) {
       return { allowed: false, status: 403, error: "privileged_role_required" };
