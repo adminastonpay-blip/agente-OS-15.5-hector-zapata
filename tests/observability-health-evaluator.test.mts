@@ -14,7 +14,7 @@ test("error-rate breach degrades and severity escalates at 25 percent", async ()
   const warning = await evaluateOperationalHealth(fresh({ sampleCount: 20, errorCount: 2 }));
   assert.equal(warning.status, "degraded"); assert.ok(warning.anomalies.some(a => a.code === "high_error_rate" && a.severity === "warning"));
   const critical = await evaluateOperationalHealth(fresh({ sampleCount: 20, errorCount: 6 }));
-  assert.equal(critical.status, "degraded"); assert.ok(critical.anomalies.some(a => a.code === "high_error_rate" && a.severity === "critical");
+  assert.equal(critical.status, "degraded"); assert.ok(critical.anomalies.some(a => a.code === "high_error_rate" && a.severity === "critical"));
 });
 test("absolute p95 and baseline regression trigger distinct anomaly codes", async () => {
   const absolute = await evaluateOperationalHealth(fresh({ p95LatencyMs: HEALTH_THRESHOLDS.maxP95LatencyMs + 1 }));
