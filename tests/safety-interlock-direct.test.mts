@@ -12,6 +12,7 @@ class FakeSqlStorage {
   exec(query: string, ...args: any[]) {
     const q = query.replace(/\s+/g, " ").trim();
     let rows: Row[] = [];
+    let rowsWritten = 0;
 
     if (/^CREATE TABLE|^CREATE TRIGGER/i.test(q)) {
       rows = [];
@@ -34,14 +35,14 @@ class FakeSqlStorage {
       rows = row ? [{ ...row }] : [];
     } else if (q.startsWith("UPDATE pending_approvals SET status = 'processing'")) {
       const row = this.pending.get(String(args[0]));
-      if (row && row.status === "pending") row.status = "processing";
+      if (row && row.status === "pending") { row.status = "processing"; rowsWritten = 1; }
     } else if (q.startsWith("UPDATE pending_approvals SET status = 'pending' WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
-      if (row && row.status === "processing") row.status = "pending";
+      if (row && row.status === "processing") { row.status = "pending"; rowsWritten = 1; }
     } else if (q.startsWith("UPDATE pending_approvals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?")) {
       const [status, decided_by, decided_at, id] = args;
       const row = this.pending.get(String(id));
-      if (row) Object.assign(row, { status, decided_by, decided_at });
+      if (row && row.status === "processing") { Object.assign(row, { status, decided_by, decided_at }); rowsWritten = 1; }
     } else if (q.startsWith("UPDATE pending_approvals SET status = 'expired' WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
       if (row) row.status = "expired";
@@ -59,7 +60,7 @@ class FakeSqlStorage {
       throw new Error("Unexpected SQL in SafetyInterlock test harness: " + q);
     }
 
-    return { toArray: () => rows };
+    return { rowsWritten, toArray: () => rows };
   }
 }
 
