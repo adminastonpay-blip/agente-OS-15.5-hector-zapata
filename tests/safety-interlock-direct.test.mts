@@ -8,14 +8,27 @@ class FakeSqlStorage {
   pending = new Map<string, Row>();
   audit: Row[] = [];
   logs: Row[] = [];
+  attestations: Row[] = [];
+  columns = new Set(["id","action_json","identity_json","policy_json","created_at","expires_at","status","decided_by","decided_at"]);
 
-  exec(query: string, ...args: any[]) {
-    const q = query.replace(/\s+/g, " ").trim();
+  exec<T extends Record<string, any>>(query: string, ...args: any[]) {
+    const q = query.replace(/\\s+/g, " ").trim();
     let rows: Row[] = [];
     let rowsWritten = 0;
 
-    if (/^CREATE TABLE|^CREATE TRIGGER/i.test(q)) {
+    if (/^CREATE TABLE|^CREATE TRIGGER|^CREATE INDEX/i.test(q)) {
       rows = [];
+    } else if (q.startsWith("PRAGMA table_info(pending_approvals)")) {
+      rows = [...this.columns].map((name) => ({ name }));
+    } else if (q.startsWith("ALTER TABLE pending_approvals ADD COLUMN")) {
+      const match = q.match(/ADD COLUMN ([a-z_]+)/i);
+      if (match) {
+        this.columns.add(match[1]);
+        for (const row of this.pending.values()) {
+          if (match[1] === "processing_attempt" || match[1] === "fencing_token") row[match[1]] = 0;
+          else row[match[1]] = null;
+        }
+      }
     } else if (q.startsWith("SELECT event_hash FROM audit_events")) {
       const tenant = String(args[0]);
       const last = this.audit.filter((r) => r.tenant === tenant).at(-1);
@@ -25,29 +38,44 @@ class FakeSqlStorage {
       rows = this.audit.filter((r) => r.tenant === tenant).map((r) => ({ record_json: r.record_json, previous_hash: r.previous_hash, event_hash: r.event_hash }));
     } else if (q.startsWith("INSERT INTO audit_events")) {
       const [ts, tenant, actor, event_type, record_json, previous_hash, event_hash] = args;
+      if (this.audit.some((r) => r.tenant === tenant && r.previous_hash === previous_hash)) throw new Error("audit_unique_conflict");
       this.audit.push({ ts, tenant, actor, event_type, record_json, previous_hash, event_hash });
+      rowsWritten = 1;
     } else if (q.startsWith("INSERT INTO pending_approvals")) {
       const [id, action_json, identity_json, policy_json, created_at, expires_at] = args;
-      // The production INSERT supplies status as the SQL literal 'pending', not a bind parameter.
-      this.pending.set(String(id), { id, action_json, identity_json, policy_json, created_at, expires_at, status: "pending" });
-    } else if (q.startsWith("SELECT * FROM pending_approvals WHERE id = ?")) {
+      this.pending.set(String(id), {
+        id, action_json, identity_json, policy_json, created_at, expires_at, status: "pending",
+        decided_by: null, decided_at: null, lease_id: null, lease_expires_at: null,
+        processing_attempt: 0, fencing_token: 0,
+      });
+      rowsWritten = 1;
+    } else if (q.startsWith("SELECT *, json_extract(identity_json") || q.startsWith("SELECT * FROM pending_approvals WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
-      rows = row ? [{ ...row }] : [];
-    } else if (q.startsWith("UPDATE pending_approvals SET status = 'processing'")) {
-      const row = this.pending.get(String(args[0]));
-      if (row && row.status === "pending") { row.status = "processing"; rowsWritten = 1; }
-    } else if (q.startsWith("UPDATE pending_approvals SET status = 'pending' WHERE id = ?")) {
-      const row = this.pending.get(String(args[0]));
-      if (row && row.status === "processing") { row.status = "pending"; rowsWritten = 1; }
-    } else if (q.startsWith("UPDATE pending_approvals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?")) {
-      const [status, decided_by, decided_at, id] = args;
+      rows = row ? [{ ...row, tenant_id: JSON.parse(row.identity_json).tenant }] : [];
+    } else if (q.startsWith("UPDATE pending_approvals SET status='processing'")) {
+      const [leaseId, leaseExpiresAt, attempt, token, id, oldStatus, now, oldAttempt, oldToken, expectedStatus, recoverAt] = args;
       const row = this.pending.get(String(id));
-      if (row && row.status === "processing") { Object.assign(row, { status, decided_by, decided_at }); rowsWritten = 1; }
-    } else if (q.startsWith("UPDATE pending_approvals SET status = 'expired' WHERE id = ?")) {
-      const row = this.pending.get(String(args[0]));
-      if (row) row.status = "expired";
+      const eligible = row && (row.status === "pending" ||
+        (row.status === "processing" && row.lease_expires_at !== null && row.lease_expires_at <= Number(recoverAt)));
+      if (row && eligible && row.status === oldStatus && oldStatus === expectedStatus &&
+          row.expires_at > Number(now) && Number(row.processing_attempt) === Number(oldAttempt) &&
+          Number(row.fencing_token) === Number(oldToken)) {
+        Object.assign(row, { status: "processing", lease_id: leaseId, lease_expires_at: leaseExpiresAt,
+          processing_attempt: attempt, fencing_token: token });
+        rowsWritten = 1;
+      }
+    } else if (q.startsWith("UPDATE pending_approvals SET status=?")) {
+      const [status, actor, at, id, leaseId, token, leaseNow, approvalNow, tenant] = args;
+      const row = this.pending.get(String(id));
+      if (row && row.status === "processing" && row.lease_id === leaseId && row.fencing_token === token &&
+          row.lease_expires_at > Number(leaseNow) && row.expires_at > Number(approvalNow) &&
+          JSON.parse(row.identity_json).tenant === tenant) {
+        Object.assign(row, { status, decided_by: actor, decided_at: at, lease_id: null, lease_expires_at: null });
+        rowsWritten = 1;
+      }
     } else if (q.startsWith("INSERT INTO decision_attestations")) {
-      rows = [];
+      this.attestations.push({ attestation_id: args[0], tenant: args[1], actor: args[2], decision: args[3], envelope_json: args[4], created_at: args[5] });
+      rowsWritten = 1;
     } else if (q.startsWith("INSERT INTO execution_log")) {
       const [ts, action_tool, decision, risk, score, actor, detail] = args;
       this.logs.push({ ts, action_tool, decision, risk, score, actor, detail });
@@ -59,8 +87,7 @@ class FakeSqlStorage {
     } else {
       throw new Error("Unexpected SQL in SafetyInterlock test harness: " + q);
     }
-
-    return { rowsWritten, toArray: () => rows };
+    return { rowsWritten, toArray: () => rows as T[] };
   }
 }
 
@@ -69,6 +96,20 @@ async function createInterlock(trustFetch: () => Promise<Response> = async () =>
   const state = {
     storage: {
       sql,
+      transactionSync<T>(closure: () => T): T {
+        const pendingBefore = new Map([...sql.pending].map(([k, v]) => [k, { ...v }]));
+        const auditBefore = sql.audit.map((v) => ({ ...v }));
+        const attestationsBefore = sql.attestations.map((v) => ({ ...v }));
+        const logsBefore = sql.logs.map((v) => ({ ...v }));
+        try { return closure(); }
+        catch (error) {
+          sql.pending.clear(); for (const [k, v] of pendingBefore) sql.pending.set(k, v);
+          sql.audit.splice(0, sql.audit.length, ...auditBefore);
+          sql.attestations.splice(0, sql.attestations.length, ...attestationsBefore);
+          sql.logs.splice(0, sql.logs.length, ...logsBefore);
+          throw error;
+        }
+      },
       async getAlarm() { return null; },
       async setAlarm(_when: number) {},
     },
