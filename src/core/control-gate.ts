@@ -362,7 +362,11 @@ export class ControlGate {
       return { ok: false, status: 403, reason: "chat_payload_too_large" };
     }
     const model = requestedModel || this.env.CHAT_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-    if (!model.startsWith("@cf/")) {
+    const allowedChatModels = new Set([
+      this.env.CHAT_MODEL,
+      "@cf/meta/llama-3.1-8b-instruct-fast",
+    ]);
+    if (!model.startsWith("@cf/") || !allowedChatModels.has(model)) {
       return { ok: false, status: 403, reason: "chat_model_not_allowlisted" };
     }
     if (!this.env.SAFETY) {
