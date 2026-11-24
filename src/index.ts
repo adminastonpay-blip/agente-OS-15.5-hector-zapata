@@ -250,7 +250,7 @@ export default {
       if (identity.method === "public") {
         return jsonResponse({ ok: false, error: "verified_identity_required" }, 403);
       }
-      return handleETLIngest(req, env, identity);
+      return handleETLIngest(req, env, identity, jsonResponse);
     }
 
     if (path === "/v1/chat" && req.method === "POST") {
@@ -288,13 +288,14 @@ export default {
       if (!isAllowedRecoveryOrigin(origin, env)) {
         return jsonResponse({ ok: false, error: "recovery_origin_not_allowed" }, 403);
       }
-      if (!env.MISSION_TOKEN_PUBLIC_KEY) {
+      const missionTokenPublicKey = env.MISSION_TOKEN_PUBLIC_KEY;
+      if (!missionTokenPublicKey) {
         return jsonResponse({ ok: false, error: "mission_token_public_key_missing" }, 503);
       }
-      const tokenHeader = req.headers.get("authorization")?.replace(/^Bearer\\s+/i, "").trim() || "";
+      const tokenHeader = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() || "";
       let mission;
       try {
-        const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(env.MISSION_TOKEN_PUBLIC_KEY);
+        const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(missionTokenPublicKey);
         mission = await verifier.verify(tokenHeader);
       } catch {
         return jsonResponse({ ok: false, error: "mission_token_invalid" }, 401);
