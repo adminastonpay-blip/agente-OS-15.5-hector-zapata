@@ -15,15 +15,32 @@ import { evaluatePolicy, type ProposedAction, type PolicyResult } from "../safet
 import { emitLineage } from "../lineage";
 import { hashAuditRecord, verifyAuditChain } from "../security/audit-chain";
 import { sha256Hex, writeImmutableCheckpoint, verifyExternalOtsAnchor } from "../security/audit-anchor";
-import { importEd25519PrivateKey, importEd25519PublicKey, signAttestation, verifyAttestation, type AttestationEnvelope } from "../core/attestation";
-import { assertCryptographicReadiness, claimOrRecoverLease, finalizeApprovalWithLease, ControlAssuranceError } from "../core/control-assurance";
+import {
+  importEd25519PrivateKey,
+  importEd25519PublicKey,
+  signAttestation,
+  verifyAttestation,
+  verifyInternalAssertion,
+  type AttestationEnvelope,
+} from "../core/attestation";
+import {
+  assertCryptographicReadiness,
+  claimOrRecoverLease,
+  finalizeApprovalWithLease,
+  ControlAssuranceError,
+} from "../core/control-assurance";
+
+type SafetyEnv = Env & {
+  INTERNAL_ASSERTION_SECRET?: string;
+  INTERNAL_ASSERTION_KEY_ID?: string;
+};
 
 export class SafetyInterlock {
   private state: DurableObjectState;
-  private env: Env;
+  private env: SafetyEnv;
   private sql: SqlStorage;
 
-  constructor(state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: SafetyEnv) {
     this.state = state;
     this.env = env;
     this.sql = state.storage.sql;
@@ -43,8 +60,10 @@ export class SafetyInterlock {
     `);
     // Idempotent SQLite migration: add lease fields without rebuilding existing tables.
     const approvalColumns = new Set(
-      this.sql.exec<Record<string, SqlStorageValue>>("PRAGMA table_info(pending_approvals)")
-        .toArray().map((row) => String(row.name)),
+      this.sql
+        .exec<Record<string, SqlStorageValue>>("PRAGMA table_info(pending_approvals)")
+        .toArray()
+        .map((row) => String(row.name))
     );
     const leaseColumns: Array<[string, string]> = [
       ["lease_id", "TEXT"],
@@ -53,10 +72,16 @@ export class SafetyInterlock {
       ["fencing_token", "INTEGER NOT NULL DEFAULT 0"],
     ];
     for (const [column, definition] of leaseColumns) {
-      if (!approvalColumns.has(column)) this.sql.exec(`ALTER TABLE pending_approvals ADD COLUMN ${column} ${definition}`);
+      if (!approvalColumns.has(column)) {
+        this.sql.exec(`ALTER TABLE pending_approvals ADD COLUMN ${column}${definition}`);
+      }
     }
-    this.sql.exec("CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_expiry ON pending_approvals(status, expires_at)");
-    this.sql.exec("CREATE INDEX IF NOT EXISTS idx_pending_approvals_processing_lease ON pending_approvals(status, lease_expires_at) WHERE status = 'processing'");
+    this.sql.exec(
+      "CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_expiry ON pending_approvals(status, expires_at)"
+    );
+    this.sql.exec(
+      "CREATE INDEX IF NOT EXISTS idx_pending_approvals_processing_lease ON pending_approvals(status, lease_expires_at) WHERE status = 'processing'"
+    );
 
     // Gate A: migración idempotente de vinculación a credencial/agente y saneo fail-closed de aprobaciones heredadas
     for (const [column, definition] of [
@@ -64,7 +89,7 @@ export class SafetyInterlock {
       ["credential_id", "TEXT"],
     ] as Array<[string, string]>) {
       if (!approvalColumns.has(column)) {
-        this.sql.exec(`ALTER TABLE pending_approvals ADD COLUMN ${column} ${definition}`);
+        this.sql.exec(`ALTER TABLE pending_approvals ADD COLUMN ${column}${definition}`);
       }
     }
 
@@ -101,7 +126,11 @@ export class SafetyInterlock {
           `INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail)
            VALUES (?, 'legacy_approval', 'EXPIRED_LEGACY_UNBOUND', 'high', 100, 'gate-a-migration', ?)`,
           migratedAt,
-          JSON.stringify({ approval_id: String(row.id), tenant, reason: "missing_agent_or_credential_binding" })
+          JSON.stringify({
+            approval_id: String(row.id),
+            tenant,
+            reason: "missing_agent_or_credential_binding",
+          })
         );
       }
     }
@@ -172,13 +201,24 @@ export class SafetyInterlock {
         UNIQUE (tenant, previous_hash)
       )
     `);
-    this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
-    this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS decision_attestations (
-      attestation_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, actor TEXT NOT NULL,
-      decision TEXT NOT NULL, envelope_json TEXT NOT NULL, created_at INTEGER NOT NULL
-    )`);
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS audit_anchor_state (tenant TEXT PRIMARY KEY, anchored_count INTEGER NOT NULL, root_hash TEXT NOT NULL, object_key TEXT NOT NULL, anchored_at INTEGER NOT NULL)`);
+    this.sql.exec(
+      `CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`
+    );
+    this.sql.exec(
+      `CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`
+    );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS decision_attestations (
+        attestation_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, actor TEXT NOT NULL,
+        decision TEXT NOT NULL, envelope_json TEXT NOT NULL, created_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS audit_anchor_state (
+        tenant TEXT PRIMARY KEY, anchored_count INTEGER NOT NULL, root_hash TEXT NOT NULL,
+        object_key TEXT NOT NULL, anchored_at INTEGER NOT NULL
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS audit_claims (
         run_id TEXT NOT NULL,
@@ -195,29 +235,4 @@ export class SafetyInterlock {
     `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS audit_rate_windows (
-        window_start INTEGER PRIMARY KEY,
-        request_count INTEGER NOT NULL
-      )
-    `);
-  }
 
-  async fetch(req: Request): Promise<Response> {
-    const u = new URL(req.url);
-
-    if (u.pathname === "/rate-limit/check" && req.method === "POST") {
-      const body = await req.json<{ limit: number; window_ms: number }>().catch(() => null);
-      if (!body || !Number.isInteger(body.limit) || body.limit < 1 || body.limit > 10000 ||
-          !Number.isInteger(body.window_ms) || body.window_ms < 1000 || body.window_ms > 3600000) {
-        return Response.json({ error: "invalid_rate_limit_policy" }, { status: 400 });
-      }
-      const now = Date.now();
-      const windowStart = Math.floor(now / body.window_ms) * body.window_ms;
-      this.sql.exec("DELETE FROM request_rate_windows WHERE window_start < ?", now - 3600000);
-      this.sql.exec(`INSERT INTO request_rate_windows (window_start, request_count)
-        VALUES (?, 1) ON CONFLICT(window_start) DO UPDATE SET request_count = request_count + 1`, windowStart);
-      const count = Number((this.sql.exec("SELECT request_count FROM request_rate_windows WHERE window_start = ?", windowStart)
-        .toArray()[0] as any)?.request_count ?? 0);
-      const allowed = count <= body.limit;
-      return Response.json({ allowed, remaining: Math.max(0, body.limit - count),
-        reset_at: windowStart + body.window_ms }, { status: allowed ? 200 : 429 });
-    }
