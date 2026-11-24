@@ -28,11 +28,13 @@ class FakeSqlStorage {
     } else if (q.startsWith("SELECT COUNT(*) AS cnt FROM sqlite_master")) {
       rows = [{ cnt: this.tables.has(String(args[0])) ? 1 : 0 }];
     } else if (q.startsWith("SELECT status FROM tenants")) {
-      rows = [];
+      rows = String(args[0]) === "tenant-alpha" ? [{ status: "active" }] : [];
     } else if (q.startsWith("SELECT status FROM agents")) {
-      rows = [];
+      rows = String(args[0]) === "tenant-alpha" && String(args[1]) === "test-agent"
+        ? [{ status: "active" }] : [];
     } else if (q.startsWith("SELECT status, expires_at, tenant_id, agent_id FROM agent_credentials")) {
-      rows = [];
+      rows = String(args[0]) === "test-credential"
+        ? [{ status: "active", expires_at: null, tenant_id: "tenant-alpha", agent_id: "test-agent" }] : [];
     } else if (q.startsWith("PRAGMA table_info(pending_approvals)")) {
       rows = [...this.columns].map((name) => ({ name }));
     } else if (q.startsWith("ALTER TABLE pending_approvals ADD COLUMN")) {
