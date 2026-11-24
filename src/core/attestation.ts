@@ -29,6 +29,12 @@ export interface AttestationEnvelope {
 const encoder = new TextEncoder();
 const ED25519: any = { name: "Ed25519" };
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer as ArrayBuffer;
+}
+
 function normalize(value: unknown, seen: Set<object>): JsonValue {
   if (
     value === null ||
@@ -79,7 +85,7 @@ export function canonicalizeJson(value: unknown): string {
 
 export async function sha256Hex(input: string | Uint8Array): Promise<string> {
   const bytes = typeof input === "string" ? encoder.encode(input) : input;
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", toArrayBuffer(bytes));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -101,7 +107,7 @@ export async function importEd25519PrivateKey(pkcs8: Uint8Array): Promise<Crypto
   if (!(pkcs8 instanceof Uint8Array) || pkcs8.byteLength < 32 || pkcs8.byteLength > 4096) {
     throw new TypeError("attestation_invalid_private_key");
   }
-  return crypto.subtle.importKey("pkcs8", pkcs8, ED25519, false, ["sign"]);
+  return crypto.subtle.importKey("pkcs8", toArrayBuffer(pkcs8), ED25519, false, ["sign"]);
 }
 
 /** Import a raw 32-byte Ed25519 public key for local signature verification. */
@@ -109,7 +115,7 @@ export async function importEd25519PublicKey(raw: Uint8Array): Promise<CryptoKey
   if (!(raw instanceof Uint8Array) || raw.byteLength !== 32) {
     throw new TypeError("attestation_invalid_public_key");
   }
-  return crypto.subtle.importKey("raw", raw, ED25519, false, ["verify"]);
+  return crypto.subtle.importKey("raw", toArrayBuffer(raw), ED25519, false, ["verify"]);
 }
 
 function signingStatement(fields: {
@@ -147,7 +153,7 @@ export async function signAttestation(
     payload: JSON.parse(canonicalPayload) as JsonValue,
     signed_at: signedAtIso,
   };
-  const signature = await crypto.subtle.sign(ED25519, privateKey, signingStatement(statement));
+  const signature = await crypto.subtle.sign(ED25519, privateKey, toArrayBuffer(signingStatement(statement)));
   return {
     ...statement,
     signature: toBase64Url(new Uint8Array(signature)),
@@ -185,7 +191,7 @@ export async function verifyAttestation(
     };
     const signature = fromBase64Url(envelope.signature);
     if (signature.byteLength !== 64) return false;
-    return await crypto.subtle.verify(ED25519, publicKey, signature, signingStatement(statement));
+    return await crypto.subtle.verify(ED25519, publicKey, toArrayBuffer(signature), toArrayBuffer(signingStatement(statement)));
   } catch {
     return false;
   }
