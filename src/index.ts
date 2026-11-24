@@ -1,7 +1,7 @@
 import type { Env, Identity } from "./types";
 import { handleETLQueue } from "./etl";
 import { handleETLIngest } from "./etl-ingest";
-import { ControlGate, consumeInferencePermit, type ChatMessage } from "./core/control-gate";
+import { ControlGate, type ChatMessage } from "./core/control-gate";
 import { ModelRunner } from "./core/model-runner";
 import { SessionMemory } from "./do/session";
 import { GraphResolver } from "./do/graph-do";
@@ -12,7 +12,8 @@ import { MissionBrain } from "./do/mission-brain";
 import { SafetyInterlock } from "./do/safety-interlock";
 import { TrustFabric } from "./do/trust-fabric";
 import { RecoveryWorkflow } from "./workflows/recovery";
-import { MissionTokenVerifier, hashRecoveryMission } from "./core/mission-token";
+import { MissionTokenVerifier } from "./core/mission-token";
+import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { isAllowedRecoveryOrigin } from "./security/recovery-guard";
 import { ReplayGuard } from "./core/replay-guard";
 import {
@@ -37,17 +38,6 @@ export {
   RecoveryWorkflow,
   ReplayGuard,
 };
-
-export interface QueueMessageBatch<Body = unknown> {
-  queue: string;
-  messages: Array<{
-    id: string;
-    timestamp: Date;
-    body: Body;
-    ack(): void;
-    retry(): void;
-  }>;
-}
 
 type GateWorkerEnv = Env & {
   INTERNAL_ASSERTION_SECRET?: string;
@@ -277,13 +267,13 @@ export default {
           decision.status
         );
       }
-      const serialized = JSON.stringify(messages);
       const model = env.CHAT_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-      if (!consumeInferencePermit(decision.permit, "chat", serialized, model)) {
-        return jsonResponse({ ok: false, error: "inference_permit_invalid_or_expired" }, 403);
-      }
       const runner = new ModelRunner(env);
-      const output = await runner.runChat(messages, model);
+      const output = await runner.runChat(decision.permit, messages, {}, model);
+      const answer = output.response || "";
+      if (!isOutputSafeForCredentialLeak(answer)) {
+        return jsonResponse({ ok: false, error: "chat_output_guard_blocked" }, 502);
+      }
       return jsonResponse({ ok: true, model, output });
     }
 
@@ -298,31 +288,35 @@ export default {
       if (!isAllowedRecoveryOrigin(origin, env)) {
         return jsonResponse({ ok: false, error: "recovery_origin_not_allowed" }, 403);
       }
-      const verifier = new MissionTokenVerifier(env);
-      const tokenHeader = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() || "";
-      const verified = await verifier.verify(tokenHeader);
-      if (!verified.ok) {
-        return jsonResponse({ ok: false, error: verified.reason }, 401);
+      if (!env.MISSION_TOKEN_PUBLIC_KEY) {
+        return jsonResponse({ ok: false, error: "mission_token_public_key_missing" }, 503);
+      }
+      const tokenHeader = req.headers.get("authorization")?.replace(/^Bearer\\s+/i, "").trim() || "";
+      let mission;
+      try {
+        const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(env.MISSION_TOKEN_PUBLIC_KEY);
+        mission = await verifier.verify(tokenHeader);
+      } catch {
+        return jsonResponse({ ok: false, error: "mission_token_invalid" }, 401);
       }
       const body = await req.json<{ actionContent?: string }>().catch(() => null);
       const actionContent = typeof body?.actionContent === "string" ? body.actionContent : "";
       const gate = new ControlGate(env);
-      const claimed = await gate.consumeMissionToken(verified.payload);
+      const claimed = await gate.consumeMissionToken(mission);
       if (!claimed.ok) {
         return jsonResponse({ ok: false, error: claimed.reason }, claimed.status);
       }
-      const authz = await gate.authorizeAction(verified.payload, actionContent);
+      const authz = await gate.authorizeAction(mission, actionContent);
       if (!authz.ok) {
         return jsonResponse(
           { ok: false, error: authz.reason, policy: authz.policy },
           authz.status
         );
       }
-      const missionHash = await hashRecoveryMission(verified.payload.missionId, actionContent);
       return jsonResponse({
         ok: true,
-        mission_id: verified.payload.missionId,
-        mission_hash: missionHash,
+        mission_id: mission.missionId,
+        mission_hash: mission.missionHash,
       });
     }
 
@@ -354,7 +348,7 @@ export default {
     return jsonResponse({ ok: false, error: "not_found", path }, 404);
   },
 
-  async queue(batch: QueueMessageBatch, env: Env, ctx: ExecutionContext): Promise<void> {
-    await handleETLQueue(batch as any, env, ctx);
+  async queue(batch: MessageBatch<unknown>, env: GateWorkerEnv): Promise<void> {
+    await handleETLQueue(batch, env);
   },
 } satisfies ExportedHandler<GateWorkerEnv>;
