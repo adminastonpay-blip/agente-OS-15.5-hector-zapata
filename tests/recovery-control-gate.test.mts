@@ -48,6 +48,8 @@ function makeEnv(options: { safety?: string; rate?: number } = {}) {
     AI: { run: async () => { calls.ai++; return { response: '{"text":"diagnosis","confidence":0.9,"action":"none"}' }; } },
     SAFETY: namespace,
     CHAT_MODEL: "@cf/meta/llama-3.1-8b-instruct",
+    INTERNAL_ASSERTION_SECRET: "unit-test-secret-1234567890",
+    INTERNAL_ASSERTION_KEY_ID: "test-recovery-gate",
   } as any;
   return { env, calls };
 }
