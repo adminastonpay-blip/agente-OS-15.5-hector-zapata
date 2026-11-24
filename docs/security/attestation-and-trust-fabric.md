@@ -4,7 +4,7 @@
 
 Every SafetyInterlock policy result is signed before it is returned. The signed payload binds the tenant, actor, phase, uppercase decision (`ALLOW`, `DENY`, or `REQUIRE_APPROVAL`), proposed action, policy result, and optional approval ID. The envelope is persisted in the tenant's SafetyInterlock Durable Object and its ID and payload digest are copied into the append-only audit event and lineage record.
 
-A human approval or rejection creates a second signed attestation (`ALLOW` or `DENY`, phase `human_approval`). If key material is missing, malformed, mismatched, or the local signature verification fails, the endpoint returns HTTP 503 and does not return an actionable decision. The transparency status remains `not_submitted`; a local Ed25519 signature is not an OpenTimestamps anchor.
+A human approval or rejection requires a verified same-tenant identity carrying `admin` or `approver`; a caller-supplied operator name is rejected. It creates a second signed attestation (`ALLOW` or `DENY`, phase `human_approval`). If key material is missing, malformed, mismatched, or the local signature verification fails, the endpoint returns HTTP 503 and does not return an actionable decision. The transparency status remains `not_submitted`; a local Ed25519 signature is not an OpenTimestamps anchor.
 
 ## Key material
 
