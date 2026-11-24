@@ -10,13 +10,17 @@ class FakeSqlStorage {
   logs: Row[] = [];
   attestations: Row[] = [];
   columns = new Set(["id","action_json","identity_json","policy_json","created_at","expires_at","status","decided_by","decided_at"]);
+  triggers = new Set<string>();
 
   exec<T extends Record<string, any>>(query: string, ...args: any[]) {
     const q = query.replace(/\s+/g, " ").trim();
     let rows: Row[] = [];
     let rowsWritten = 0;
 
-    if (/^CREATE TABLE|^CREATE TRIGGER|^CREATE INDEX/i.test(q)) {
+    if (q.startsWith("CREATE TRIGGER")) {
+      const match = q.match(/TRIGGER IF NOT EXISTS ([a-zA-Z0-9_]+)/);
+      if (match) this.triggers.add(match[1]);
+    } else if (/^CREATE TABLE|^CREATE INDEX/i.test(q)) {
       rows = [];
     } else if (q.startsWith("PRAGMA table_info(pending_approvals)")) {
       rows = [...this.columns].map((name) => ({ name }));
@@ -221,4 +225,30 @@ test("AST-CA-003 / Trust Fabric Durable Object outage returns 503 and creates no
   assert.equal(result.ok, false);
   assert.equal(sql.pending.size, 0);
   assert.equal(sql.logs.length, 0);
+});
+
+test("AST-LEASE-MIGRATION: adds lease columns idempotently and preserves existing approval and audit triggers", async () => {
+  const sql = new FakeSqlStorage();
+  const legacy = {
+    id: "legacy-approval", action_json: "{}", identity_json: JSON.stringify({ tenant: "tenant-alpha" }),
+    policy_json: "{}", created_at: 10, expires_at: 90000, status: "pending",
+    decided_by: null, decided_at: null,
+  };
+  sql.pending.set(legacy.id, { ...legacy });
+  const state: any = { storage: {
+    sql,
+    transactionSync<T>(closure: () => T): T { return closure(); },
+    async getAlarm() { return null; }, async setAlarm(_when: number) {},
+  } };
+  new SafetyInterlock(state, {} as any);
+  const firstTriggerSet = [...sql.triggers].sort();
+  new SafetyInterlock(state, {} as any);
+  for (const column of ["lease_id", "lease_expires_at", "processing_attempt", "fencing_token"]) {
+    assert.ok(sql.columns.has(column), `missing migrated column: ${column}`);
+  }
+  assert.deepEqual([...sql.triggers].sort(), firstTriggerSet);
+  assert.equal(sql.pending.get(legacy.id)?.status, "pending");
+  assert.equal(sql.pending.get(legacy.id)?.processing_attempt, 0);
+  assert.equal(sql.pending.get(legacy.id)?.fencing_token, 0);
+  assert.equal(sql.pending.get(legacy.id)?.identity_json, legacy.identity_json);
 });
