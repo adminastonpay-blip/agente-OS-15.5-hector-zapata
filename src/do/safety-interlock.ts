@@ -16,7 +16,7 @@ import { emitLineage } from "../lineage";
 import { hashAuditRecord, verifyAuditChain } from "../security/audit-chain";
 import { sha256Hex, writeImmutableCheckpoint, verifyExternalOtsAnchor } from "../security/audit-anchor";
 import { importEd25519PrivateKey, importEd25519PublicKey, signAttestation, verifyAttestation, type AttestationEnvelope } from "../core/attestation";
-import { assertCryptographicReadiness, consumeApprovalAtomic, ControlAssuranceError } from "../core/control-assurance";
+import { assertCryptographicReadiness, claimOrRecoverLease, finalizeApprovalWithLease, ControlAssuranceError } from "../core/control-assurance";
 
 export class SafetyInterlock {
   private state: DurableObjectState;
@@ -41,6 +41,23 @@ export class SafetyInterlock {
         decided_at INTEGER
       )
     `);
+    // Idempotent SQLite migration: add lease fields without rebuilding existing tables.
+    const approvalColumns = new Set(
+      this.sql.exec<Record<string, SqlStorageValue>>("PRAGMA table_info(pending_approvals)")
+        .toArray().map((row) => String(row.name)),
+    );
+    const leaseColumns: Array<[string, string]> = [
+      ["lease_id", "TEXT"],
+      ["lease_expires_at", "INTEGER"],
+      ["processing_attempt", "INTEGER NOT NULL DEFAULT 0"],
+      ["fencing_token", "INTEGER NOT NULL DEFAULT 0"],
+    ];
+    for (const [column, definition] of leaseColumns) {
+      if (!approvalColumns.has(column)) this.sql.exec(`ALTER TABLE pending_approvals ADD COLUMN ${column} ${definition}`);
+    }
+    this.sql.exec("CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_expiry ON pending_approvals(status, expires_at)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS idx_pending_approvals_processing_lease ON pending_approvals(status, lease_expires_at) WHERE status = 'processing'");
+
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS execution_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -375,10 +392,6 @@ export class SafetyInterlock {
       approval_id: input.approval_id ?? null,
     }, privateKey, keyId, "att_" + crypto.randomUUID());
     if (!(await verifyAttestation(envelope, publicKey))) throw new Error("attestation_self_verification_failed");
-    this.sql.exec(
-      "INSERT INTO decision_attestations (attestation_id, tenant, actor, decision, envelope_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      envelope.attestation_id, input.tenant, input.actor, input.decision, JSON.stringify(envelope), Date.now(),
-    );
     return envelope;
   }
 
@@ -405,6 +418,11 @@ export class SafetyInterlock {
       tenant: identity.tenant, actor: identity.actor, decision: decisionLabel,
       action, policy, approval_id: approvalId, phase: "policy",
     });
+    // Policy-decision attestations are persisted on this non-approval path.
+    this.sql.exec(
+      "INSERT INTO decision_attestations (attestation_id, tenant, actor, decision, envelope_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      attestation.attestation_id, identity.tenant, identity.actor, decisionLabel, JSON.stringify(attestation), now,
+    );
     if (approvalId) {
       this.sql.exec(
         `INSERT INTO pending_approvals
@@ -455,11 +473,12 @@ export class SafetyInterlock {
       return { error: "verified_approver_identity_required", status: 403 };
     }
 
-    const initial = this.sql.exec(
-      "SELECT * FROM pending_approvals WHERE id = ? LIMIT 1", approvalId,
-    ).toArray()[0] as any;
+    const initial = this.sql.exec<Record<string, SqlStorageValue>>(
+      "SELECT *, json_extract(identity_json, '$.tenant') AS tenant_id FROM pending_approvals WHERE id = ? LIMIT 1",
+      approvalId,
+    ).toArray()[0];
     if (!initial) return { error: "approval not found", status: 404 };
-    const originalIdentity = JSON.parse(initial.identity_json) as Identity;
+    const originalIdentity = JSON.parse(String(initial.identity_json)) as Identity;
     if (operatorIdentity.tenant !== originalIdentity.tenant) {
       await this.appendAuditEvent(originalIdentity.tenant, operatorIdentity.actor, "approval.cross_tenant_blocked", {
         approval_id: approvalId, request_tenant: operatorIdentity.tenant,
@@ -467,58 +486,67 @@ export class SafetyInterlock {
       return { error: "verified_same_tenant_approver_required", status: 403 };
     }
 
-    const action = JSON.parse(initial.action_json) as ProposedAction;
-    const policy = JSON.parse(initial.policy_json) as PolicyResult;
-    let attestation: AttestationEnvelope | undefined;
+    const action = JSON.parse(String(initial.action_json)) as ProposedAction;
+    const policy = JSON.parse(String(initial.policy_json)) as PolicyResult;
+    const decision = approved ? "approved" : "rejected";
+    const nowMs = Date.now();
     try {
-      const consumed = await consumeApprovalAtomic(this.sql, {
+      // Claim is durable and audited before signing. If signing fails, the lease
+      // remains processing until expiry; no compensating rollback reopens it.
+      const lease = await claimOrRecoverLease({
+        storage: this.state.storage,
+        sql: this.sql,
         approvalId,
         tenantId: originalIdentity.tenant,
-        operatorId: operatorIdentity.actor,
-        decision: approved ? "approved" : "rejected",
-        nowMs: Date.now(),
-        signDecision: async () => {
-          attestation = await this.createDecisionAttestation({
-            tenant: originalIdentity.tenant,
-            actor: operatorIdentity.actor,
-            decision: approved ? "ALLOW" : "DENY",
-            action,
-            policy,
-            approval_id: approvalId,
-            phase: "human_approval",
-          });
-          return attestation.attestation_id;
+        actorId: operatorIdentity.actor,
+        nowMs,
+      });
+      const attestation = await this.createDecisionAttestation({
+        tenant: originalIdentity.tenant,
+        actor: operatorIdentity.actor,
+        decision: approved ? "ALLOW" : "DENY",
+        action,
+        policy,
+        approval_id: approvalId,
+        phase: "human_approval",
+      });
+      const finalized = await finalizeApprovalWithLease({
+        storage: this.state.storage,
+        sql: this.sql,
+        env: this.env,
+        approvalId,
+        tenantId: originalIdentity.tenant,
+        operator: {
+          actor: operatorIdentity.actor, tenant: operatorIdentity.tenant,
+          roles: operatorIdentity.roles, method: operatorIdentity.method,
         },
-        appendAudit: async (event) => {
-          await this.appendAuditEvent(event.tenant, event.actor, event.eventType, event.payload);
+        decision,
+        nowMs: Date.now(),
+        leaseId: lease.leaseId,
+        fencingToken: lease.fencingToken,
+        attestation,
+      });
+      const newStatus = decision;
+      this.sql.exec(
+        "INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        Date.now(), action.tool, newStatus, policy.risk, policy.score, operatorIdentity.actor,
+        JSON.stringify({ attestation_id: finalized.attestationId, fencing_token: lease.fencingToken }),
+      );
+      await emitLineage(this.env, {
+        tenant: originalIdentity.tenant, object_id: finalized.attestationId,
+        transformation: `safety.human_${newStatus}`, pipeline_version: "v15.5",
+        actor: operatorIdentity.actor, metadata: {
+          original_actor: originalIdentity.actor, approval_id: approvalId,
+          attestation_id: finalized.attestationId, fencing_token: lease.fencingToken,
         },
       });
-      if (!attestation || consumed.attestationId !== attestation.attestation_id) {
-        throw new Error("decision_attestation_missing");
-      }
+      return { status: newStatus, approval_id: approvalId, action, decided_by: operatorIdentity.actor, attestation };
     } catch (error) {
       if (error instanceof ControlAssuranceError) {
         return { error: error.message, code: error.code, status: error.statusCode };
       }
       return { error: "decision_attestation_unavailable", status: 503 };
     }
-
-    const newStatus = approved ? "approved" : "rejected";
-    this.sql.exec(
-      `INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      Date.now(), action.tool, newStatus, policy.risk, policy.score, operatorIdentity.actor,
-      JSON.stringify({ attestation_id: attestation.attestation_id }),
-    );
-    await emitLineage(this.env, {
-      tenant: originalIdentity.tenant, object_id: attestation.attestation_id,
-      transformation: `safety.human_${newStatus}`, pipeline_version: "v15.5",
-      actor: operatorIdentity.actor, metadata: {
-        original_actor: originalIdentity.actor, approval_id: approvalId,
-        attestation_id: attestation.attestation_id,
-      },
-    });
-    return { status: newStatus, approval_id: approvalId, action, decided_by: operatorIdentity.actor, attestation };
   }
 
   private async sandboxExec(opts: {
