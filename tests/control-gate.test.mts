@@ -60,6 +60,9 @@ function makeEnv(options: {
       AI: ai,
       SAFETY: namespace,
       CHAT_MODEL: "@cf/meta/llama-3.1-8b-instruct",
+      // Test-only signing material: production ControlGate must fail closed without these bindings.
+      INTERNAL_ASSERTION_SECRET: "unit-test-secret-1234567890",
+      INTERNAL_ASSERTION_KEY_ID: "test-control-gate",
     } as any,
   };
 }
