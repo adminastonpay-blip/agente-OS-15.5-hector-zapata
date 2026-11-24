@@ -1,0 +1,47 @@
+name: ASTON Observability CI
+
+on:
+  pull_request:
+    paths:
+      - "src/observability/**"
+      - "src/routes/engineering-health.ts"
+      - "src/index.ts"
+      - "src/audit/staging-route-guard.ts"
+      - "tests/observability-*.mts"
+      - "tests/engineering-health.test.mts"
+      - "package.json"
+      - "tsconfig.json"
+      - ".github/workflows/observability-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aston-observability-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  observability:
+    name: Typecheck, security tests and Wrangler dry-runs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: TypeScript check
+        run: npm run check
+      - name: Observability tests
+        run: npm run test:observability
+      - name: Security regression tests
+        run: npm run test:security
+      - name: Validate production bundle (dry run only)
+        run: npx wrangler deploy --dry-run
+      - name: Validate staging bundle (dry run only)
+        run: npx wrangler deploy --dry-run --config wrangler.staging.toml
