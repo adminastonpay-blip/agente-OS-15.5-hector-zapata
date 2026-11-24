@@ -1,6 +1,9 @@
 /**
  * ASTON OS 21.0 route surface — fail-closed Gate A enforcement.
  * Does not alter /chat contract.
+ *
+ * Restored after truncation that broke TypeScript ('}' expected).
+ * Exports both handleV21 (path-based) and routeV21 (adapter for index.ts).
  */
 import type { Env, Identity } from "../types";
 import { createObjectType, createObject, createLink, cascadeImpact } from "../ontology";
@@ -31,13 +34,45 @@ function hasVerifiedIdentity(identity: Identity | undefined | null): identity is
   return Boolean(
     identity &&
       identity.method !== "public" &&
-      identity.actor?.trim() &&
-      identity.tenant?.trim()
+      typeof identity.tenant === "string" &&
+      identity.tenant.trim().length > 0 &&
+      typeof identity.actor === "string" &&
+      identity.actor.trim().length > 0
   );
 }
 
-function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status, headers: { "cache-control": "no-store" } });
+async function verifyRequestProofOfPossession(
+  req: Request,
+  identity: Identity,
+  rawBodyText: string
+): Promise<{ ok: true } | { ok: false; status: 401 | 403; error: string }> {
+  const sig = req.headers.get("x-aston-pop-signature")?.trim();
+  const pubB64Url = req.headers.get("x-aston-pop-public-key")?.trim();
+  if (!sig && !pubB64Url) {
+    return { ok: false, status: 401, error: "pop_signature_required" };
+  }
+  if (!sig || !pubB64Url) {
+    return { ok: false, status: 401, error: "incomplete_pop_headers" };
+  }
+  if (identity.method === "public" || !identity.tenant || !identity.actor) {
+    return { ok: false, status: 403, error: "verified_identity_required_for_pop" };
+  }
+  try {
+    const pubKey = await importEd25519PublicKey(fromBase64Url(pubB64Url));
+    const path = new URL(req.url).pathname;
+    const statement = canonicalizeJson({
+      method: req.method,
+      path,
+      tenant: identity.tenant,
+      actor: identity.actor,
+      body: rawBodyText,
+    });
+    const valid = await verifyEd25519ProofOfPossession(pubKey, statement, sig);
+    if (!valid) return { ok: false, status: 401, error: "invalid_ed25519_pop_signature" };
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 401, error: "malformed_ed25519_pop" };
+  }
 }
 
 async function buildInternalAssertionHeaders(
@@ -69,20 +104,114 @@ async function buildInternalAssertionHeaders(
 }
 
 export function pillarStatus(env: Env) {
-  return { ontology: !!env.DB, rag: !!(env.VECTORIZE && env.AI), safety: !!env.SAFETY, lineage: !!env.DB };
+  return {
+    ai: !!env.AI,
+    session: !!env.SESSION,
+    graph: !!env.GRAPH,
+    supervisor: !!env.SUPERVISOR,
+    agent: !!env.AGENT,
+    simulation: !!env.SIMULATION,
+    mission: !!env.MISSION,
+    safety: !!env.SAFETY,
+    d1: !!env.DB,
+    vectorize: !!env.VECTORIZE,
+    journal: !!env.JOURNAL,
+    etl_queue: !!env.ETL_QUEUE,
+    missions_queue: !!env.MISSIONS,
+    hyperdrive: !!env.HYPERDRIVE,
+  };
 }
 
 export async function handleV21(
+  path: string,
   req: Request,
   env: GateEnv,
-  _ctx: ExecutionContext,
-  identity: Identity
+  identity: Identity,
+  json: (d: unknown, s?: number) => Response
 ): Promise<Response | null> {
-  const url = new URL(req.url);
-  const path = url.pathname;
-  const readJsonBody = async <T,>(): Promise<T> => {
-    try { return (await req.json()) as T; } catch { return {} as T; }
+  if (!hasVerifiedIdentity(identity)) {
+    return json({ ok: false, error: "verified_identity_required" }, 403);
+  }
+
+  let rawBodyText: string | null = null;
+  const readJsonBody = async <T = any>(): Promise<T> => {
+    if (rawBodyText === null) {
+      rawBodyText = await req.text().catch(() => "");
+    }
+    if (!rawBodyText) return {} as T;
+    try {
+      return JSON.parse(rawBodyText) as T;
+    } catch {
+      return {} as T;
+    }
   };
+
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    await readJsonBody();
+  }
+  const popCheck = await verifyRequestProofOfPossession(req, identity, rawBodyText ?? "");
+  if (!popCheck.ok) {
+    return json({ ok: false, error: popCheck.error }, popCheck.status);
+  }
+
+  if (path === "/v1/rag/ingest" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    const text = String(body.text || body.content || "").trim();
+    const source = String(body.source || "upload").slice(0, 200);
+    if (!text) return json({ ok: false, error: "text required" }, 400);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    if (!env.AI) return json({ ok: false, error: "AI required" }, 503);
+    if (!env.DB) return json({ ok: false, error: "D1 binding required for RAG persistence" }, 503);
+    if (!env.VECTORIZE) return json({ ok: false, error: "Vectorize binding required for tenant-isolated RAG" }, 503);
+    const parts = chunk(text);
+    const vectors = await embed(env, identity, parts);
+    const ids: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const id = crypto.randomUUID();
+      ids.push(id);
+      await env.DB.prepare(
+        `INSERT INTO rag_documents (id, tenant, source, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+        .bind(id, namespace, source, i, parts[i], Date.now())
+        .run()
+        .catch(() => {});
+      await env.VECTORIZE.upsert([
+        {
+          id,
+          values: vectors[i],
+          namespace,
+          metadata: { tenant: namespace, source, text: parts[i].slice(0, 500) },
+        },
+      ]);
+    }
+    await emitLineage(env, {
+      tenant: namespace,
+      object_id: ids[0] || source,
+      transformation: "rag.ingest",
+      pipeline_version: "v15.5",
+      actor: identity.actor,
+      metadata: { chunks: parts.length, source },
+    }).catch(() => {});
+    return json({ ok: true, chunks: parts.length, ids });
+  }
+
+  if (path === "/v1/rag/query" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    const query = String(body.query || body.q || "").trim();
+    if (!query) return json({ ok: false, error: "query required" }, 400);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    if (!env.VECTORIZE || !env.AI) return json({ ok: false, error: "VECTORIZE and AI required" }, 503);
+    const [qvec] = await embed(env, identity, [query]);
+    const results = await env.VECTORIZE.query(qvec, {
+      topK: Number(body.topK) || 5,
+      returnMetadata: "all",
+      namespace,
+      filter: { tenant: { $eq: namespace } },
+    } as any);
+    return json({ ok: true, matches: results.matches ?? [], namespace });
+  }
 
   if (path === "/v1/decide" && req.method === "POST") {
     const body = await readJsonBody<any>();
@@ -131,7 +260,10 @@ export async function handleV21(
       } catch { /* ignore */ }
     }
     const out = await chat(env, identity, [
-      { role: "system", content: "ASTON OS decision engine. Sé concreto. Si hay contexto RAG, úsalo; no inventes hechos." },
+      {
+        role: "system",
+        content: "ASTON OS decision engine. Sé concreto. Si hay contexto RAG, úsalo; no inventes hechos.",
+      },
       ...(context
         ? [{ role: "user" as const, content: `Contexto:\n${context}\n\nPregunta: ${message}` }]
         : [{ role: "user" as const, content: message }]),
@@ -146,4 +278,30 @@ export async function handleV21(
   }
 
   return null;
+}
+
+/** Adapter expected by src/index.ts */
+export async function routeV21(
+  req: Request,
+  env: GateEnv,
+  _ctx: ExecutionContext,
+  identity: Identity,
+  _opts?: {
+    createInternalAssertion?: (
+      aud: string,
+      id: Identity
+    ) => Promise<{ ok: true; headers: Record<string, string> } | { ok: false; error: string }>;
+  }
+): Promise<Response> {
+  const url = new URL(req.url);
+  let path = url.pathname;
+  if (path === "/v21") path = "/v1/capabilities";
+  else if (path.startsWith("/v21/")) path = "/v1/" + path.slice("/v21/".length);
+
+  const json = (d: unknown, s = 200): Response =>
+    Response.json(d, { status: s, headers: { "cache-control": "no-store" } });
+
+  const result = await handleV21(path, req, env, identity, json);
+  if (result) return result;
+  return json({ ok: false, error: "not_found", path }, 404);
 }
