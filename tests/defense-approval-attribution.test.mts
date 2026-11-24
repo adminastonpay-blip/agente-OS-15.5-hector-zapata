@@ -9,7 +9,7 @@ test("DEFENSE-APPROVAL-ACTOR-001 / caller cannot forge the human approver identi
     actor: "verified-operator-17",
     method: "access",
     tenant: "tenant-alpha",
-    roles: ["executor"],
+    roles: ["approver"],
     clearance: "internal",
   } as any;
   const env = {
@@ -50,4 +50,6 @@ test("DEFENSE-APPROVAL-ACTOR-001 / caller cannot forge the human approver identi
   assert.equal(forwarded.approved, true);
   assert.equal(forwarded.operator, "verified-operator-17");
   assert.notEqual(forwarded.operator, "attacker-controlled-name");
+  assert.equal(forwarded.identity.actor, "verified-operator-17");
+  assert.ok(forwarded.identity.roles.includes("approver"));
 });
