@@ -199,6 +199,15 @@ export async function consumeApprovalAtomic(
       "UPDATE pending_approvals SET status = 'pending' WHERE id = ? AND status = 'processing'",
       params.approvalId,
     );
+    // If finalization succeeded but audit persistence failed, revoke the resolution
+    // before returning 503. A signed receipt alone never authorizes execution.
+    sql.exec(
+      "UPDATE pending_approvals SET status = 'pending', decided_by = NULL, decided_at = NULL WHERE id = ? AND status = ? AND decided_by = ? AND decided_at = ?",
+      params.approvalId,
+      params.decision,
+      params.operatorId,
+      params.nowMs,
+    );
     throw error instanceof ControlAssuranceError
       ? error
       : new ControlAssuranceError(503, "APPROVAL_ATTESTATION_FAILED", "Decision signing failed; approval was not consumed.");
