@@ -7,6 +7,7 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
 export type InferenceScope = "chat" | "embeddings" | "tts" | "extraction" | "recovery_diagnosis";
 
 const INFERENCE_PERMIT_TTL_MS = 60_000;
+const INTERNAL_ASSERTION_TTL_MS = 15_000;
 const issuedPermits = new WeakMap<object, { action: InferenceScope; payload: string; model: string; expiresAt: number }>();
 
 declare const permitBrand: unique symbol;
@@ -18,13 +19,53 @@ export type GateResult =
   | { ok: true; permit: InferencePermit }
   | { ok: false; status: 403 | 429 | 503; reason: string; policy?: unknown };
 
+type AssertionCapableEnv = Env & {
+  INTERNAL_ASSERTION_SECRET?: string;
+  INTERNAL_ASSERTION_KEY_ID?: string;
+};
+
 /**
  * Accepts only identities produced by the existing authentication boundary.
  * Caller-supplied tenant/user fields are never trusted here.
  */
 export class ControlGate {
-  constructor(private readonly env: Env) {}
+  constructor(private readonly env: AssertionCapableEnv) {}
 
+  private async createInternalAssertionHeaders(aud: string, subjectTenant: string, subjectActor: string): Promise<Record<string, string>> {
+    const secret = this.env.INTERNAL_ASSERTION_SECRET;
+    const keyId = this.env.INTERNAL_ASSERTION_KEY_ID;
+    if (!secret || !keyId) {
+      return {};
+    }
+    const nowMs = Date.now();
+    const expMs = nowMs + INTERNAL_ASSERTION_TTL_MS;
+    const jti = crypto.randomUUID();
+    const claims = {
+      iss: "control-gate",
+      aud,
+      sub_tenant: subjectTenant,
+      sub_actor: subjectActor,
+      jti,
+      iat: nowMs,
+      exp: expMs,
+    };
+    const encodedClaims = btoa(JSON.stringify(claims)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sigBuffer = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(`${keyId}.${encodedClaims}`));
+    const sigB64Url = btoa(String.fromCharCode(...new Uint8Array(sigBuffer)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    return {
+      "x-aston-internal-assertion": `${keyId}.${encodedClaims}.${sigB64Url}`,
+    };
+  }
 
   /**
    * Atomically claims a verified Recovery token before any policy evaluation
@@ -42,9 +83,10 @@ export class ControlGate {
     }
     try {
       const stub = namespace.get(namespace.idFromName("recovery-replay:" + payload.tenantId));
+      const assertionHeaders = await this.createInternalAssertionHeaders("replay-guard", payload.tenantId, payload.sub || "recovery");
       const response = await stub.fetch("https://replay.internal/consume", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertionHeaders },
         body: JSON.stringify({ jti: payload.jti, exp: payload.exp }),
       });
       if (response.status === 409) {
@@ -61,7 +103,6 @@ export class ControlGate {
       return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
     }
   }
-
 
   async authorizeAction(
     payload: MissionTokenPayload,
@@ -89,9 +130,10 @@ export class ControlGate {
       const safetyStub = this.env.SAFETY.get(
         this.env.SAFETY.idFromName("aston-recovery-safety:" + payload.tenantId)
       );
+      const assertionHeaders = await this.createInternalAssertionHeaders("safety-interlock", payload.tenantId, payload.sub);
       const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertionHeaders },
         body: JSON.stringify({
           action: {
             tool: "recovery_diagnosis",
@@ -170,9 +212,10 @@ export class ControlGate {
     }
     try {
       const safetyStub = safety.get(safety.idFromName("aston-model-safety:" + identity.tenant));
+      const assertionHeaders = await this.createInternalAssertionHeaders("safety-interlock", identity.tenant, identity.actor);
       const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertionHeaders },
         body: JSON.stringify({
           action: {
             tool: action === "embeddings" ? "model_embeddings" : action === "extraction" ? "model_extraction" : "model_tts",
@@ -198,121 +241,4 @@ export class ControlGate {
         };
       }
       const rate = await new RateLimiter(this.env).check(identity.tenant, action);
-      if (!rate.allowed) {
-        return { ok: false, status: rate.unavailable ? 503 : 429,
-          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded" };
-      }
-      const permit = Object.freeze({});
-      issuedPermits.set(permit, { action, payload: serialized, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
-      return { ok: true, permit: permit as unknown as InferencePermit };
-    } catch {
-      return { ok: false, status: 503, reason: "control_gate_unavailable" };
-    }
-  }
-
-  async authorizeChat(identity: Identity, messages: ChatMessage[], modelOverride?: string): Promise<GateResult> {
-    if (
-      !identity ||
-      identity.method === "public" ||
-      !identity.actor?.trim() ||
-      !identity.tenant?.trim() ||
-      !Array.isArray(identity.roles) ||
-      !identity.clearance
-    ) {
-      return { ok: false, status: 403, reason: "verified_identity_required" };
-    }
-
-    const safetyNamespace = this.env.SAFETY;
-    if (!this.env.AI || !safetyNamespace) {
-      return { ok: false, status: 503, reason: "control_gate_binding_unavailable" };
-    }
-
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return { ok: false, status: 403, reason: "invalid_inference_payload" };
-    }
-
-    const payload = JSON.stringify(messages);
-    if (payload.length > 32_000) {
-      return { ok: false, status: 403, reason: "inference_payload_too_large" };
-    }
-
-    try {
-      const safetyStub = safetyNamespace.get(
-        safetyNamespace.idFromName("aston-chat-safety")
-      );
-      const userMessage = [...messages].reverse().find((item) => item.role === "user");
-      const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: {
-            tool: "chat_completion",
-            args: {
-              message: userMessage?.content ?? "",
-              payload_sha256: await this.sha256(payload),
-            },
-            context: { objective: "authorize chat model inference" },
-          },
-          identity,
-        }),
-      });
-
-      const decision = await evaluation
-        .json<{ status?: string; policy?: unknown }>()
-        .catch((): { status?: string; policy?: unknown } => ({}));
-      if (!evaluation.ok || decision.status !== "allowed") {
-        return {
-          ok: false,
-          status: evaluation.ok ? 403 : 503,
-          reason: decision.status === "pending_approval"
-            ? "human_approval_required"
-            : decision.status === "denied"
-              ? "safety_policy_denied"
-              : "safety_evaluation_failed",
-          policy: decision.policy,
-        };
-      }
-
-      const rate = await new RateLimiter(this.env).check(identity.tenant, "chat");
-      if (!rate.allowed) {
-        return {
-          ok: false,
-          status: rate.unavailable ? 503 : 429,
-          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded",
-        };
-      }
-
-      const model = modelOverride || this.env.CHAT_MODEL;
-      if (!model || !model.startsWith("@cf/")) {
-        return { ok: false, status: 503, reason: "approved_chat_model_not_configured" };
-      }
-
-      const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "chat", payload, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
-      return { ok: true, permit: permit as unknown as InferencePermit };
-    } catch {
-      return { ok: false, status: 503, reason: "control_gate_unavailable" };
-    }
-  }
-
-  private async sha256(value: string): Promise<string> {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-}
-
-/** Internal capability consumption: one permit, one exact payload, one inference. */
-export function consumeInferencePermit(
-  permit: InferencePermit,
-  action: InferenceScope,
-  payload: string,
-  model: string
-): boolean {
-  if (!permit || typeof permit !== "object") return false;
-  const issued = issuedPermits.get(permit as object);
-  if (!issued || issued.action !== action || issued.payload !== payload || issued.model !== model) {
-    return false;
-  }
-  issuedPermits.delete(permit as object);
-  return true;
-}
+      if (!rate
