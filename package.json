@@ -17,7 +17,8 @@
     "test:token-issuer": "node --experimental-loader ./tests/ts-loader.mjs --test tests/token-issuer.test.mts",
     "test:recovery-e2e": "node --experimental-loader ./tests/ts-loader.mjs --test tests/recovery-e2e.test.mts",
     "test:rag-isolation": "node --experimental-loader ./tests/ts-loader.mjs --test tests/rag-isolation.test.mts tests/agent-rag-tenant-isolation.test.mts",
-    "check-ai-guardrail": "node scripts/check-ai-guardrail.mjs"
+    "check-ai-guardrail": "node scripts/check-ai-guardrail.mjs",
+    "test:attestation": "node --experimental-loader ./tests/ts-loader.mjs --test tests/attestation.test.mts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261106.1",
