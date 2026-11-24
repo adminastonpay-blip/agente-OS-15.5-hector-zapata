@@ -345,6 +345,7 @@ export class ControlGate {
   async authorizeChat(identity: Identity, messages: ChatMessage[]): Promise<GateResult> {
     if (
       !identity ||
+      identity.method === "public" ||
       !identity.tenant?.trim() ||
       !identity.actor?.trim() ||
       !Array.isArray(messages) ||
@@ -358,22 +359,7 @@ export class ControlGate {
     }
     const model = this.env.CHAT_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
     if (!this.env.SAFETY) {
-      const rate = await new RateLimiter(this.env).check(identity.tenant, "chat");
-      if (!rate.allowed) {
-        return {
-          ok: false,
-          status: rate.unavailable ? 503 : 429,
-          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded",
-        };
-      }
-      const permit = Object.freeze({});
-      issuedPermits.set(permit, {
-        action: "chat",
-        payload: serialized,
-        model,
-        expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS,
-      });
-      return { ok: true, permit: permit as unknown as InferencePermit };
+      return { ok: false, status: 503, reason: "chat_safety_binding_unavailable" };
     }
 
     const assertion = await this.createInternalAssertionHeaders(
