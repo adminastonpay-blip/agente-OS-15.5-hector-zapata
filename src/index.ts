@@ -316,6 +316,12 @@ export default {
       });
     }
 
+    const bounded = await enforceRequestBodyLimit(req, identity);
+    if (!bounded.result.ok) {
+      return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
+    }
+    req = bounded.request;
+
     if (path.startsWith("/v1/trust/") && req.method === "POST") {
       if (!env.TRUST) return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
       if (identity.method === "public" || !identity.actor || !identity.tenant ||
@@ -347,12 +353,6 @@ export default {
         return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
       }
     }
-    const bounded = await enforceRequestBodyLimit(req, identity);
-    if (!bounded.result.ok) {
-      return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
-    }
-    req = bounded.request;
-
     const access = authorizeApiRequest(req, path, identity);
     if (!access.allowed) {
       return json({ ok: false, error: access.error }, access.status);
