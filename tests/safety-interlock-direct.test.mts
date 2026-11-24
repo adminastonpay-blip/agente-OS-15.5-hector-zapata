@@ -85,6 +85,12 @@ class FakeSqlStorage {
     } else if (q.startsWith("SELECT action_json, policy_json FROM pending_approvals")) {
       const row = this.pending.get(String(args[0]));
       rows = row ? [{ action_json: row.action_json, policy_json: row.policy_json }] : [];
+    } else if (q.startsWith("SELECT id, identity_json, status, expires_at FROM pending_approvals")) {
+      const row = this.pending.get(String(args[0]));
+      rows = row ? [{ id: row.id, identity_json: row.identity_json, status: row.status, expires_at: row.expires_at }] : [];
+    } else if (q.startsWith("SELECT action_json, policy_json FROM pending_approvals")) {
+      const row = this.pending.get(String(args[0]));
+      rows = row ? [{ action_json: row.action_json, policy_json: row.policy_json }] : [];
     } else if (q.startsWith("SELECT *, json_extract(identity_json") || q.startsWith("SELECT * FROM pending_approvals WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
       rows = row ? [{ ...row, tenant_id: JSON.parse(row.identity_json).tenant }] : [];
