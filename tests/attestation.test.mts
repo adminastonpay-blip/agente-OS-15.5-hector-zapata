@@ -49,4 +49,8 @@ test("Ed25519 attestation signs canonical payload and rejects tampering", async 
 
   const tampered = { ...envelope, payload: { z: "changed", a: "first" } };
   assert.equal(await verifyAttestation(tampered, publicKey), false);
+  const changedKeyId = { ...envelope, key_id: "attacker-selected-key" };
+  assert.equal(await verifyAttestation(changedKeyId, publicKey), false);
+  const changedTimestamp = { ...envelope, signed_at: "2026-11-25T00:00:00.000Z" };
+  assert.equal(await verifyAttestation(changedTimestamp, publicKey), false);
 });
