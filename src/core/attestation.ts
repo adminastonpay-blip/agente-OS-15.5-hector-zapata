@@ -27,7 +27,7 @@ export interface AttestationEnvelope {
 }
 
 const encoder = new TextEncoder();
-const ED25519 = { name: "Ed25519" } as AlgorithmIdentifier;
+const ED25519: any = { name: "Ed25519" };
 
 function normalize(value: unknown, seen: Set<object>): JsonValue {
   if (
