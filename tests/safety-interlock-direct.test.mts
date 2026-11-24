@@ -176,7 +176,7 @@ test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense m
     body: JSON.stringify({ approval_id: gate.approval_id, approved: true, identity: { ...identity, actor: operator, roles: ["approver"] } }),
   }));
   const replay = await replayResponse.json<any>();
-  assert.equal(replay.code, "APPROVAL_ALREADY_CONSUMED");
+  assert.equal(replay.code, "APPROVAL_LEASE_HELD_OR_CONSUMED");
   assert.equal(replay.status, 409);
 
   const logResponse = await interlock.fetch(new Request("https://safety.internal/log?limit=10"));
