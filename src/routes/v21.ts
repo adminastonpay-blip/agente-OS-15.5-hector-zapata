@@ -1,5 +1,5 @@
 /**
- * ASTON OS 21.0 route surface — additive, fails soft when optional bindings missing.
+ * ASTON OS 21.0 route surface — fail-closed Gate A enforcement.
  * Does not alter /chat contract.
  */
 import type { Env, Identity } from "../types";
@@ -41,8 +41,8 @@ function hasVerifiedIdentity(identity: Identity | undefined | null): identity is
 }
 
 /**
- * Verifies optional Ed25519 Proof-of-Possession headers when presented.
- * Fails closed (returns false) if headers are partially present or invalid.
+ * Enforces Ed25519 Proof-of-Possession on verified requests.
+ * Fails closed whenever PoP headers are missing, incomplete, mismatched, or invalid.
  */
 async function verifyRequestProofOfPossession(
   req: Request,
@@ -60,9 +60,8 @@ async function verifyRequestProofOfPossession(
   if (claimedActor && claimedActor !== identity.actor) {
     return { ok: false, status: 403, error: "actor_header_mismatch" };
   }
-
   if (!sig && !pubB64Url) {
-    return { ok: true };
+    return { ok: false, status: 401, error: "pop_signature_required" };
   }
   if (!sig || !pubB64Url) {
     return { ok: false, status: 401, error: "incomplete_pop_headers" };
@@ -95,9 +94,6 @@ async function buildInternalAssertionHeaders(
 ): Promise<{ ok: true; headers: Record<string, string> } | { ok: false; error: string }> {
   const secret = env.INTERNAL_ASSERTION_SECRET;
   const kid = env.INTERNAL_ASSERTION_KEY_ID;
-  if (!secret && !kid) {
-    return { ok: true, headers: {} };
-  }
   if (!secret || !kid) {
     return { ok: false, error: "internal_assertion_config_incomplete" };
   }
@@ -163,12 +159,12 @@ export async function handleV21(
     }
   };
 
-  if (req.method === "POST") {
+  if (req.method !== "GET" && req.method !== "HEAD") {
     await readJsonBody();
-    const popCheck = await verifyRequestProofOfPossession(req, identity, rawBodyText ?? "");
-    if (!popCheck.ok) {
-      return json({ ok: false, error: popCheck.error }, popCheck.status);
-    }
+  }
+  const popCheck = await verifyRequestProofOfPossession(req, identity, rawBodyText ?? "");
+  if (!popCheck.ok) {
+    return json({ ok: false, error: popCheck.error }, popCheck.status);
   }
 
   if (path === "/v1/rag/ingest" && req.method === "POST") {
@@ -525,50 +521,5 @@ export async function handleV21(
           action: { tool: "decision_inference", args: { message_length: message.length }, context: { objective: "ASTON decision request" } },
           identity,
         }),
-      });
-      const safetyResult = await safetyResponse.json<any>().catch(() => ({}));
-      if (!safetyResponse.ok || safetyResult.status !== "allowed") {
-        return json({ ok: false, error: "decision_blocked_by_safety_interlock", policy: safetyResult.policy }, safetyResponse.ok ? 403 : 503);
-      }
-    } catch {
-      return json({ ok: false, error: "decision_safety_unavailable" }, 503);
-    }
-    let context = "";
-    if (env.VECTORIZE && env.AI) {
-      try {
-        const [qvec] = await embed(env, identity, [message]);
-        const m = await env.VECTORIZE.query(qvec, {
-          topK: 3,
-          returnMetadata: "all",
-          namespace,
-          filter: { tenant: { $eq: namespace } },
-        } as any);
-        context = (m.matches ?? [])
-          .map((x: any) => x.metadata?.text)
-          .filter(Boolean)
-          .join("\n---\n");
-      } catch {
-        /* ignore */
-      }
-    }
-    const out = await chat(env, identity, [
-      {
-        role: "system",
-        content:
-          "ASTON OS decision engine. Sé concreto. Si hay contexto RAG, úsalo; no inventes hechos.",
-      },
-      ...(context
-        ? [{ role: "user" as const, content: `Contexto:\n${context}\n\nPregunta: ${message}` }]
-        : [{ role: "user" as const, content: message }]),
-    ]);
-    if (env.DB) {
-      await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
-        .bind(Date.now(), "decide", identity.actor, JSON.stringify({ message: message.slice(0, 200) }))
-        .run()
-        .catch(() => {});
-    }
-    return json({ ok: true, answer: out.response, model: out.model, rag: !!context, version: "21.0-edge" });
-  }
+      
 
-  return null;
-}
