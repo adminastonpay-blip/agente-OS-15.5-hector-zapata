@@ -66,6 +66,9 @@ jobs:
       - name: Native Ed25519 attestation tests
         run: npm run test:attestation
 
+      - name: Tenant Trust Fabric RBAC tests
+        run: npm run test:trust-fabric
+
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
 
