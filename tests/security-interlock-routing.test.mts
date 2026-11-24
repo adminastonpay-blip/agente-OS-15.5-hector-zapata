@@ -13,16 +13,16 @@ test("chat route uses the Control Gate and one-use Model Runner permit", () => {
   const end = source.indexOf('if (path.startsWith("/v21/")', start);
   assert.ok(start >= 0 && end > start, "inline chat route must exist");
   const handler = source.slice(start, end);
-  assert.match(handler, /new ControlGate\\(env\\)\\.authorizeChat\\(identity, messages\\)/);
-  assert.match(handler, /runner\\.runChat\\(decision\\.permit, messages/);
-  assert.match(handler, /if \\(!decision\\.ok\\)/);
-  assert.match(handler, /isOutputSafeForCredentialLeak\\(answer\\)/);
+  assert.match(handler, /new ControlGate\(env\)\.authorizeChat\(identity, messages\)/);
+  assert.match(handler, /runner\.runChat\(decision\.permit, messages/);
+  assert.match(handler, /if \(!decision\.ok\)/);
+  assert.match(handler, /isOutputSafeForCredentialLeak\(answer\)/);
 });
 
 test("streaming has no unguarded execution route", () => {
-  assert.doesNotMatch(source, /path === ["']\\/v1\\/chat\\/stream["']/);
-  assert.doesNotMatch(source, /\\bchatStream\\s*\\(/);
-  assert.match(source, /error: "not_found", path \\}, 404/);
+  assert.doesNotMatch(source, /path === ["']\/v1\/chat\/stream["']/);
+  assert.doesNotMatch(source, /\bchatStream\s*\(/);
+  assert.match(source, /error: "not_found", path \}, 404/);
 });
 
 test("decision inference is gated and Supervisor fails closed without the interlock", () => {
