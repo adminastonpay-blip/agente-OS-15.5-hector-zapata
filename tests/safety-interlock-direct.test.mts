@@ -64,7 +64,7 @@ class FakeSqlStorage {
   }
 }
 
-async function createInterlock() {
+async function createInterlock(trustFetch: () => Promise<Response> = async () => Response.json({ ok: true, effect: "allow", reason: "test_role_grant" })) {
   const sql = new FakeSqlStorage();
   const state = {
     storage: {
@@ -77,7 +77,7 @@ async function createInterlock() {
   const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/[+]/g, "-").replace(/[/]/g, "_");
   const privateKey = encode(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
   const publicKey = encode(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
-  const trust = { idFromName() { return {}; }, get() { return { async fetch() { return Response.json({ ok: true, effect: "allow", reason: "test_role_grant" }); } }; } };
+  const trust = { idFromName() { return {}; }, get() { return { fetch: trustFetch }; } };
   const env = { TRUST: trust, ATTESTATION_PRIVATE_KEY: privateKey, ATTESTATION_PUBLIC_KEY: publicKey, ATTESTATION_KEY_ID: "test-key-1" };
   return { interlock: new SafetyInterlock(state, env as any), sql };
 }
@@ -164,4 +164,20 @@ test("AST-013C-DO-002 / actual SafetyInterlock class denies critical action with
   assert.equal(result.status, "denied");
   assert.equal(result.policy.decision, "deny");
   assert.equal(sql.pending.size, 0);
+});
+
+test("AST-CA-003 / Trust Fabric Durable Object outage returns 503 and creates no approval or execution log", async () => {
+  const { interlock, sql } = await createInterlock(async () => { throw new Error("simulated_trust_do_timeout"); });
+  const response = await interlock.fetch(new Request("https://safety.internal/evaluate", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: { tool: "defense_mitigate", args: { mode: "block_ip", ip: "192.0.2.99" } },
+      identity,
+    }),
+  }));
+  assert.equal(response.status, 503);
+  const result = await response.json<any>();
+  assert.equal(result.ok, false);
+  assert.equal(sql.pending.size, 0);
+  assert.equal(sql.logs.length, 0);
 });
