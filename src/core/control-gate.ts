@@ -342,7 +342,11 @@ export class ControlGate {
     }
   }
 
-  async authorizeChat(identity: Identity, messages: ChatMessage[]): Promise<GateResult> {
+  async authorizeChat(
+    identity: Identity,
+    messages: ChatMessage[],
+    requestedModel?: string
+  ): Promise<GateResult> {
     if (
       !identity ||
       identity.method === "public" ||
@@ -357,7 +361,10 @@ export class ControlGate {
     if (!serialized || serialized.length > 64_000) {
       return { ok: false, status: 403, reason: "chat_payload_too_large" };
     }
-    const model = this.env.CHAT_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    const model = requestedModel || this.env.CHAT_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    if (!model.startsWith("@cf/")) {
+      return { ok: false, status: 403, reason: "chat_model_not_allowlisted" };
+    }
     if (!this.env.SAFETY) {
       return { ok: false, status: 503, reason: "chat_safety_binding_unavailable" };
     }
