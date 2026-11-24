@@ -298,6 +298,24 @@ export default {
     const auditResponse = await handleStagingAudit(req, env, handleChat);
     if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
+    const rate = await checkRequestRateLimit(
+      env,
+      identity,
+      path,
+      req.method,
+      req.headers.get("CF-Connecting-IP")
+    );
+    if ("unavailable" in rate) {
+      return json({ ok: false, error: "rate_limit_service_unavailable" }, 503);
+    }
+    if (!rate.allowed) {
+      const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000));
+      return new Response(JSON.stringify({ ok: false, error: "rate_limit_exceeded", retry_after_seconds: retryAfter }), {
+        status: 429,
+        headers: { "Content-Type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS, "Retry-After": String(retryAfter) },
+      });
+    }
+
     if (path.startsWith("/v1/trust/") && req.method === "POST") {
       if (!env.TRUST) return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
       if (identity.method === "public" || !identity.actor || !identity.tenant ||
@@ -329,24 +347,6 @@ export default {
         return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
       }
     }
-    const rate = await checkRequestRateLimit(
-      env,
-      identity,
-      path,
-      req.method,
-      req.headers.get("CF-Connecting-IP")
-    );
-    if ("unavailable" in rate) {
-      return json({ ok: false, error: "rate_limit_service_unavailable" }, 503);
-    }
-    if (!rate.allowed) {
-      const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000));
-      return new Response(JSON.stringify({ ok: false, error: "rate_limit_exceeded", retry_after_seconds: retryAfter }), {
-        status: 429,
-        headers: { "Content-Type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS, "Retry-After": String(retryAfter) },
-      });
-    }
-
     const bounded = await enforceRequestBodyLimit(req, identity);
     if (!bounded.result.ok) {
       return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
