@@ -37,6 +37,8 @@ type SafetyEnv = Env & {
   ATTESTATION_PUBLIC_KEY?: string;
   ATTESTATION_KEY_ID?: string;
   TRUST?: DurableObjectNamespace;
+  /** Explicitly enabled only by unit-test harnesses; never set in deployed Worker environments. */
+  SAFETY_INTERLOCK_TEST_MODE?: "true";
 };
 
 export class SafetyInterlock {
@@ -242,7 +244,24 @@ export class SafetyInterlock {
       if (path === "/evaluate" && request.method === "POST") {
         const secret = this.env.INTERNAL_ASSERTION_SECRET;
         const kid = this.env.INTERNAL_ASSERTION_KEY_ID;
-        if (secret && kid) {
+        const assertionConfigured = Boolean(secret || kid);
+        const body = await request.json().catch(() => null) as
+          | { action?: ProposedAction; identity?: Identity }
+          | null;
+        if (!body || !body.action || typeof body.action.tool !== "string" ||
+            !body.action.args || typeof body.action.args !== "object" || Array.isArray(body.action.args)) {
+          return Response.json({ error: "invalid_evaluation_request", code: "INVALID_EVALUATION_REQUEST" }, { status: 400 });
+        }
+
+        let boundIdentity: Identity;
+        let principalBinding: { agent_id?: string; credential_id?: string } = {};
+        if (assertionConfigured) {
+          if (!secret || !kid) {
+            return Response.json(
+              { error: "internal_assertion_secret_or_kid_missing", code: "INTERNAL_ASSERTION_CONFIG_MISSING" },
+              { status: 503 }
+            );
+          }
           const token = request.headers.get("x-aston-internal-assertion")?.trim() || "";
           if (!token) {
             return Response.json(
@@ -270,44 +289,65 @@ export class SafetyInterlock {
             });
           } catch (err) {
             if (err instanceof ControlAssuranceError) {
-              return Response.json(
-                { error: err.message, code: err.code },
-                { status: err.statusCode }
-              );
+              return Response.json({ error: err.message, code: err.code }, { status: err.statusCode });
             }
             return Response.json(
               { error: "nonce_consume_failed", code: "NONCE_CONSUME_FAILED" },
               { status: 503 }
             );
           }
-          const body = (await request.json()) as { action: ProposedAction; identity?: Identity };
-          const boundIdentity: Identity = {
+          boundIdentity = {
             actor: verified.claims.sub_actor,
             tenant: verified.claims.sub_tenant,
             method: "access",
-            roles: body.identity?.roles ?? ["authenticated"],
-            clearance: body.identity?.clearance ?? "internal",
+            // Roles and clearance are resolved by Trust Fabric, never copied from the request.
+            roles: ["authenticated"],
+            clearance: "internal",
           };
-          const result = await this.evaluateAndGate(body.action, boundIdentity);
-          return Response.json(result);
+          principalBinding = {
+            ...(verified.claims.sub_agent ? { agent_id: verified.claims.sub_agent } : {}),
+            ...(verified.claims.sub_credential ? { credential_id: verified.claims.sub_credential } : {}),
+          };
+        } else {
+          // Explicit test-only path. Production never accepts unsigned request identities.
+          if (this.env.SAFETY_INTERLOCK_TEST_MODE !== "true") {
+            return Response.json(
+              { error: "internal_assertion_secret_or_kid_missing", code: "INTERNAL_ASSERTION_CONFIG_MISSING" },
+              { status: 503 }
+            );
+          }
+          const candidate = body.identity;
+          if (!candidate || typeof candidate.actor !== "string" || !candidate.actor.trim() ||
+              typeof candidate.tenant !== "string" || !candidate.tenant.trim() ||
+              candidate.method === "public" || !Array.isArray(candidate.roles) ||
+              !candidate.roles.every((role) => typeof role === "string") ||
+              !["public", "internal", "confidential", "secret"].includes(candidate.clearance)) {
+            return Response.json(
+              { error: "verified_non_public_identity_required", code: "IDENTITY_REQUIRED" },
+              { status: 403 }
+            );
+          }
+          boundIdentity = candidate;
         }
-        return Response.json(
-          { error: "internal_assertion_secret_or_kid_missing", code: "INTERNAL_ASSERTION_CONFIG_MISSING" },
-          { status: 503 }
-        );
+
+        const result = await this.evaluateAndGate(body.action, boundIdentity, principalBinding);
+        return Response.json(result);
       }
 
-      if (path === "/approve" && request.method === "POST") {
-        const body = (await request.json()) as {
-          approval_id: string;
-          approved: boolean;
-          operator: string;
+      if ((path === "/approve" || path === "/decide") && request.method === "POST") {
+        const body = await request.json().catch(() => null) as {
+          approval_id?: string;
+          approved?: boolean;
+          operator?: string;
           identity?: Identity;
-        };
+        } | null;
+        if (!body || typeof body.approval_id !== "string" || typeof body.approved !== "boolean") {
+          return Response.json({ error: "invalid_approval_decision", code: "INVALID_APPROVAL_DECISION" }, { status: 400 });
+        }
         const result = await this.decideApproval(
           body.approval_id,
           body.approved,
-          body.operator,
+          body.operator ?? "",
           body.identity
         );
         if ((result as { error?: string }).error) {
@@ -317,7 +357,51 @@ export class SafetyInterlock {
         return Response.json(result);
       }
 
-      if (path === "/sandbox" && request.method === "POST") {
+      if (path === "/pending" && request.method === "GET") {
+        const rows = this.sql.exec(
+          `SELECT id, action_json, policy_json, created_at, expires_at, status
+           FROM pending_approvals WHERE status = 'pending' ORDER BY created_at DESC LIMIT 50`
+        ).toArray() as Array<Record<string, SqlStorageValue>>;
+        return Response.json({
+          pending: rows.map((row) => ({
+            id: String(row.id),
+            action: JSON.parse(String(row.action_json)),
+            policy: JSON.parse(String(row.policy_json)),
+            created_at: Number(row.created_at),
+            expires_at: Number(row.expires_at),
+          })),
+        });
+      }
+
+      if (path === "/log" && request.method === "GET") {
+        const requested = Number.parseInt(url.searchParams.get("limit") ?? "30", 10);
+        const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, requested)) : 30;
+        const rows = this.sql.exec(
+          `SELECT ts, action_tool, decision, risk, score, actor, detail
+           FROM execution_log ORDER BY id DESC LIMIT ?`,
+          limit
+        ).toArray();
+        return Response.json({ entries: rows });
+      }
+
+      if (path === "/audit/verify" && request.method === "GET") {
+        const tenant = url.searchParams.get("tenant") ?? "";
+        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tenant)) {
+          return Response.json({ error: "invalid_tenant" }, { status: 400 });
+        }
+        const rows = this.sql.exec(
+          "SELECT record_json, previous_hash, event_hash FROM audit_events WHERE tenant = ? ORDER BY id ASC",
+          tenant
+        ).toArray() as Array<{ record_json: string; previous_hash: string; event_hash: string }>;
+        const intact = await verifyAuditChain(rows.map((row) => ({
+          record: row.record_json,
+          previousHash: row.previous_hash,
+          hash: row.event_hash,
+        })));
+        return Response.json({ tenant, intact, events: rows.length });
+      }
+
+      if ((path === "/sandbox" || path === "/sandbox/exec") && request.method === "POST") {
         const body = (await request.json()) as {
           code: string;
           language?: "javascript" | "python" | "bash";
@@ -334,6 +418,9 @@ export class SafetyInterlock {
 
       return Response.json({ error: "not_found", path }, { status: 404 });
     } catch (err) {
+      if (err instanceof ControlAssuranceError) {
+        return Response.json({ ok: false, error: err.message, code: err.code }, { status: err.statusCode });
+      }
       const message = err instanceof Error ? err.message : String(err);
       return Response.json({ error: "internal", message }, { status: 500 });
     }
@@ -341,19 +428,107 @@ export class SafetyInterlock {
 
   private async evaluateAndGate(
     action: ProposedAction,
-    identity: Identity
+    identity: Identity,
+    principalBinding: { agent_id?: string; credential_id?: string } = {}
   ): Promise<{
     status: "allowed" | "denied" | "pending_approval";
     policy?: PolicyResult;
     approval_id?: string;
     reasons?: string[];
+    attestation?: AttestationEnvelope;
   }> {
-    const policy = evaluatePolicy(action, identity);
+    if (!this.env.TRUST) {
+      throw new ControlAssuranceError(503, "TRUST_BINDING_MISSING", "TRUST Durable Object binding is unavailable.");
+    }
 
+    // Trust authorization is deliberately the first external gate: no log, audit or approval
+    // write is permitted until the tenant-scoped Trust Fabric has answered.
+    let trustDecision: { ok?: boolean; effect?: string; effective_roles?: string[]; reason?: string };
+    try {
+      const trustId = this.env.TRUST.idFromName(identity.tenant);
+      const trustStub = this.env.TRUST.get(trustId);
+      const trustResponse = await trustStub.fetch(new Request("https://trust.internal/authorize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenant: identity.tenant,
+          actor: identity.actor,
+          tool: action.tool,
+          roles: identity.roles,
+          clearance: identity.clearance,
+        }),
+      }));
+      if (!trustResponse.ok) {
+        throw new Error("trust_authorization_http_" + trustResponse.status);
+      }
+      trustDecision = await trustResponse.json() as typeof trustDecision;
+      if (trustDecision.ok !== true ||
+          !["allow", "deny", "require_approval"].includes(String(trustDecision.effect))) {
+        throw new Error("trust_authorization_invalid_response");
+      }
+    } catch {
+      throw new ControlAssuranceError(503, "TRUST_AUTHORIZATION_UNAVAILABLE", "Trust Fabric authorization failed; evaluation is closed.");
+    }
+
+    const effectiveIdentity: Identity = {
+      ...identity,
+      roles: Array.isArray(trustDecision.effective_roles)
+        ? trustDecision.effective_roles.filter((role): role is string => typeof role === "string")
+        : identity.roles,
+    };
+    let policy = evaluatePolicy(action, effectiveIdentity);
+    if (trustDecision.effect === "deny") {
+      policy = {
+        ...policy,
+        decision: "deny",
+        reasons: [...policy.reasons, trustDecision.reason || "Trust Fabric denied this action."],
+      };
+    } else if (trustDecision.effect === "require_approval" && policy.decision === "allow") {
+      policy = {
+        ...policy,
+        decision: "require_approval",
+        reasons: [...policy.reasons, trustDecision.reason || "Trust Fabric requires human approval."],
+      };
+    }
+
+    let attestation: AttestationEnvelope | undefined;
+    const hasAnyAttestationKey = Boolean(
+      this.env.ATTESTATION_PRIVATE_KEY || this.env.ATTESTATION_PUBLIC_KEY || this.env.ATTESTATION_KEY_ID
+    );
+    if (hasAnyAttestationKey) {
+      if (!this.env.ATTESTATION_PRIVATE_KEY || !this.env.ATTESTATION_PUBLIC_KEY || !this.env.ATTESTATION_KEY_ID) {
+        throw new ControlAssuranceError(503, "ATTESTATION_KEYS_MISSING", "Attestation key configuration is incomplete.");
+      }
+      try {
+        const encoded = this.env.ATTESTATION_PRIVATE_KEY;
+        const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+        const privateBytes = Uint8Array.from(
+          atob(normalized + "=".repeat((4 - (normalized.length % 4)) % 4)),
+          (char) => char.charCodeAt(0)
+        );
+        const privateKey = await importEd25519PrivateKey(privateBytes);
+        const decisionLabel = policy.decision === "allow"
+          ? "ALLOW"
+          : policy.decision === "deny" ? "DENY" : "REQUIRE_APPROVAL";
+        attestation = await signAttestation({
+          schema: "aston.safety.decision.v1",
+          tenant: identity.tenant,
+          actor: identity.actor,
+          phase: "policy_evaluation",
+          decision: decisionLabel,
+          action,
+          policy,
+        }, privateKey, this.env.ATTESTATION_KEY_ID, "att_" + crypto.randomUUID());
+      } catch {
+        throw new ControlAssuranceError(503, "ATTESTATION_SIGN_FAILED", "Policy decision attestation could not be signed.");
+      }
+    }
+
+    const now = Date.now();
     this.sql.exec(
       `INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      Date.now(),
+      now,
       action.tool,
       policy.decision,
       policy.risk,
@@ -367,30 +542,51 @@ export class SafetyInterlock {
       decision: policy.decision,
       risk: policy.risk,
       score: policy.score,
+      reasons: policy.reasons ?? [],
     });
 
+    if (attestation) {
+      const label = (attestation.payload as Record<string, unknown>).decision as string;
+      this.sql.exec(
+        "INSERT INTO decision_attestations (attestation_id, tenant, actor, decision, envelope_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        attestation.attestation_id,
+        identity.tenant,
+        identity.actor,
+        label,
+        JSON.stringify(attestation),
+        now
+      );
+    }
+
     if (policy.decision === "deny") {
-      return { status: "denied", policy, reasons: policy.reasons };
+      return { status: "denied", policy, reasons: policy.reasons, ...(attestation ? { attestation } : {}) };
     }
 
     if (policy.decision === "require_approval") {
       const approvalId = crypto.randomUUID();
-      const now = Date.now();
+      const expiresAt = now + (policy.expires_in_ms ?? 30 * 60 * 1000);
       this.sql.exec(
         `INSERT INTO pending_approvals
-         (id, action_json, identity_json, policy_json, created_at, expires_at, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+         (id, action_json, identity_json, policy_json, created_at, expires_at, status, agent_id, credential_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         approvalId,
         JSON.stringify(action),
         JSON.stringify(identity),
         JSON.stringify(policy),
         now,
-        now + 30 * 60 * 1000
+        expiresAt,
+        principalBinding.agent_id ?? null,
+        principalBinding.credential_id ?? null
       );
-      return { status: "pending_approval", policy, approval_id: approvalId };
+      return {
+        status: "pending_approval",
+        policy,
+        approval_id: approvalId,
+        ...(attestation ? { attestation } : {}),
+      };
     }
 
-    return { status: "allowed", policy };
+    return { status: "allowed", policy, ...(attestation ? { attestation } : {}) };
   }
 
   private async appendAuditEvent(
@@ -406,8 +602,8 @@ export class SafetyInterlock {
         tenant
       )
       .toArray();
-    const previousHash = previous[0]?.event_hash ?? "genesis";
-    const recordJson = JSON.stringify({ ts, tenant, actor, event_type: eventType, ...record });
+    const previousHash = previous[0]?.event_hash ?? "GENESIS";
+    const recordJson = JSON.stringify({ ts, tenant, actor, event_type: eventType, payload: record });
     const eventHash = await hashAuditRecord(previousHash, recordJson);
     this.sql.exec(
       `INSERT INTO audit_events (ts, tenant, actor, event_type, record_json, previous_hash, event_hash)
@@ -456,22 +652,15 @@ export class SafetyInterlock {
       return { error: "approval missing tenant binding", status: 403, code: "TENANT_BINDING_MISSING" };
     }
 
-    const actorId =
-      (operatorIdentity?.actor && operatorIdentity.actor.trim()) ||
-      (typeof operator === "string" && operator.trim()) ||
-      "";
-    if (!actorId) {
-      return { error: "verified approver required", status: 403, code: "VERIFIED_APPROVER_REQUIRED" };
+    const actorId = operatorIdentity?.actor?.trim() ?? "";
+    const roles = Array.isArray(operatorIdentity?.roles) ? operatorIdentity.roles : [];
+    const method = operatorIdentity?.method ?? "public";
+    if (!operatorIdentity || method === "public" || !actorId ||
+        operatorIdentity.tenant !== tenantId ||
+        !(roles.includes("approver") || roles.includes("admin")) ||
+        (operator && operator.trim() && operator.trim() !== actorId)) {
+      return { error: "verified same-tenant approver required", status: 403, code: "VERIFIED_APPROVER_REQUIRED" };
     }
-
-    const roles =
-      operatorIdentity?.roles && Array.isArray(operatorIdentity.roles)
-        ? operatorIdentity.roles
-        : ["approver"];
-    const method =
-      operatorIdentity?.method && operatorIdentity.method !== "public"
-        ? operatorIdentity.method
-        : "access";
 
     try {
       await assertCryptographicReadiness(this.env as any);
@@ -582,6 +771,7 @@ export class SafetyInterlock {
         attestation_id: result.attestationId,
         lease_id: lease.leaseId,
         fencing_token: lease.fencingToken,
+        attestation,
       };
     } catch (err) {
       if (err instanceof ControlAssuranceError) {
