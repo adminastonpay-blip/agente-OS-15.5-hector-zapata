@@ -18,13 +18,13 @@ const BUILTIN_ROLE_GRANTS: Record<string, string[]> = {
   admin: ["*"],
   executor: ["*"],
   recovery_diagnosis: ["recovery_diagnosis"],
-  reader: ["read:*", "get:*", "list:*", "inspect:*", "status:*", "chat_completion"],
+  reader: ["read_*", "get_*", "list_*", "inspect_*", "status_*", "chat_completion"],
 };
 
 function roleAllows(role: string, tool: string): boolean {
   const grants = BUILTIN_ROLE_GRANTS[role] ?? [];
   return grants.some((grant) => grant === "*" || grant === tool ||
-    (grant.endsWith(":*") && tool.startsWith(grant.slice(0, -1))));
+    (grant.endsWith("*") && tool.startsWith(grant.slice(0, -1))));
 }
 
 /** Default-deny tenant RBAC. Risk scoring remains a separate, stricter policy layer. */
