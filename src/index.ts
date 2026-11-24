@@ -10,6 +10,7 @@ import { AgentNode } from "./do/agent-node";
 import { SimulationTwin } from "./do/simulation";
 import { MissionBrain } from "./do/mission-brain";
 import { SafetyInterlock } from "./do/safety-interlock";
+import { TrustFabric } from "./do/trust-fabric";
 import { RecoveryWorkflow } from "./workflows/recovery";
 import { MissionTokenVerifier, hashRecoveryMission } from "./core/mission-token";
 import { isAllowedRecoveryOrigin } from "./security/recovery-guard";
@@ -49,6 +50,7 @@ export {
   SimulationTwin,
   MissionBrain,
   SafetyInterlock,
+  TrustFabric,
   ReplayGuard,
   RecoveryWorkflow,
 };
