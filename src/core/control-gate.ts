@@ -68,12 +68,12 @@ export class ControlGate {
   ): Promise<{ ok: true; headers: Record<string, string> } | { ok: false; reason: string }> {
     const secret = this.env.INTERNAL_ASSERTION_SECRET;
     const keyId = this.env.INTERNAL_ASSERTION_KEY_ID;
-    if (!secret && !keyId) {
-      return { ok: true, headers: {} };
-    }
+
+    // Fail-closed: missing configuration must never produce a successful empty assertion.
     if (!secret || !keyId) {
-      return { ok: false, reason: "internal_assertion_config_incomplete" };
+      return { ok: false, reason: "internal_assertion_secret_or_kid_missing" };
     }
+
     try {
       const token = await signInternalAssertion(
         {
@@ -442,4 +442,3 @@ export class ControlGate {
     }
   }
 }
-
