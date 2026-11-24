@@ -104,10 +104,12 @@ export async function consumeApprovalAtomic(
   sql: SqlStorage,
   params: ConsumeApprovalParams,
 ): Promise<{ record: PendingApproval; attestationId: string }> {
-  const rows = sql.exec<PendingApproval>(
+  // SqlStorage.exec<T> constrains T to a string-keyed SQLite row.
+  // Keep the domain interface strict and narrow the storage row at this boundary.
+  const rows = sql.exec<Record<string, SqlStorageValue>>(
     "SELECT * FROM pending_approvals WHERE id = ? LIMIT 1",
     params.approvalId,
-  ).toArray();
+  ).toArray() as unknown as PendingApproval[];
   const record = rows[0];
 
   if (!record) {
