@@ -142,14 +142,16 @@ export async function consumeApprovalAtomic(
       "UPDATE pending_approvals SET status = 'expired' WHERE id = ? AND status = 'pending'",
       params.approvalId,
     );
-    if (expired.rowsWritten === 1) {
-      await params.appendAudit({
-        tenant: params.tenantId,
-        actor: params.operatorId,
-        eventType: "approval.expired_rejected",
-        payload: { approval_id: params.approvalId, expires_at: record.expires_at },
-      });
-    }
+    await params.appendAudit({
+      tenant: params.tenantId,
+      actor: params.operatorId,
+      eventType: "approval.expired_rejected",
+      payload: {
+        approval_id: params.approvalId,
+        expires_at: record.expires_at,
+        transition_applied: expired.rowsWritten === 1,
+      },
+    });
     throw new ControlAssuranceError(410, "APPROVAL_EXPIRED", "Approval has expired.");
   }
 
