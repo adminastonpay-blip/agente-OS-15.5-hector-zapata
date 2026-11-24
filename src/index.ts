@@ -364,4 +364,310 @@ async function handleVoice(req: Request, env: Env, identity: Awaited<ReturnType<
         },
       });
     }
-    return json({ ok: true, profile: profile.id
+    return json({ ok: true, profile: profile.id, model, text_spoken: spoken, audio: raw || null });
+  } catch (e: any) {
+    return json(
+      { ok: false, error: "Voice unavailable", detail: String(e?.message || e).slice(0, 250) },
+      502
+    );
+  }
+}
+
+export default {
+  async fetch(req: Request, env: GateWorkerEnv): Promise<Response> {
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+
+    const u = new URL(req.url);
+    const path = u.pathname.replace(/\/+$/, "") || "/";
+    if (!isStagingRouteAllowed(env.DEPLOY_PROFILE, path)) {
+      return json({ ok: false, error: "staging_route_disabled" }, 404);
+    }
+    const auditResponse = await handleStagingAudit(req, env, handleChat);
+    if (auditResponse) return auditResponse;
+    const identity = await resolveIdentity(req, env);
+    const rate = await checkRequestRateLimit(
+      env,
+      identity,
+      path,
+      req.method,
+      req.headers.get("CF-Connecting-IP")
+    );
+    if ("unavailable" in rate) {
+      return json({ ok: false, error: "rate_limit_service_unavailable" }, 503);
+    }
+    if (!rate.allowed) {
+      const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000));
+      return new Response(JSON.stringify({ ok: false, error: "rate_limit_exceeded", retry_after_seconds: retryAfter }), {
+        status: 429,
+        headers: { "Content-Type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS, "Retry-After": String(retryAfter) },
+      });
+    }
+
+    const bounded = await enforceRequestBodyLimit(req, identity);
+    if (!bounded.result.ok) {
+      return json({ ok: false, error: "request_body_limit_exceeded", limit: bounded.result.limit }, 413);
+    }
+    req = bounded.request;
+
+    const popCheck = await verifyWorkerPopIfPresent(req, identity, path);
+    if (!popCheck.ok) {
+      return json({ ok: false, error: popCheck.error }, popCheck.status);
+    }
+
+    if (path.startsWith("/v1/trust/") && req.method === "POST") {
+      if (!env.TRUST) return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
+      if (identity.method === "public" || !identity.actor || !identity.tenant ||
+          !Array.isArray(identity.roles) || !identity.roles.includes("admin")) {
+        return json({ ok: false, error: "verified_tenant_admin_required" }, 403);
+      }
+      const allowedTrustRoutes = new Set([
+        "/v1/trust/roles/grant",
+        "/v1/trust/roles/revoke",
+        "/v1/trust/policies/set",
+      ]);
+      if (!allowedTrustRoutes.has(path)) return json({ ok: false, error: "not_found" }, 404);
+      const body = await req.json<any>().catch(() => null);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return json({ ok: false, error: "invalid_trust_request" }, 400);
+      }
+      const assertion = await createWorkerInternalAssertion(env, "trust-fabric", identity);
+      if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+      try {
+        const stub = env.TRUST.get(env.TRUST.idFromName("tenant:" + identity.tenant));
+        const response = await stub.fetch("https://trust.internal" + path.replace("/v1/trust", ""), {
+          method: "POST",
+          headers: { "content-type": "application/json", ...assertion.headers },
+          body: JSON.stringify({ ...body, tenant: identity.tenant, identity }),
+        });
+        return new Response(response.body, {
+          status: response.status,
+          headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS },
+        });
+      } catch {
+        return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
+      }
+    }
+    const access = authorizeApiRequest(req, path, identity);
+    if (!access.allowed) {
+      return json({ ok: false, error: access.error }, access.status);
+    }
+
+    if (path === "/v1/etl/ingest" && req.method === "POST") {
+      // ETL ingress is deliberately enabled only on the isolated staging Worker.
+      if (!String(env.DEPLOY_PROFILE || "").toLowerCase().includes("staging")) {
+        return json({ ok: false, error: "etl_ingest_disabled_outside_staging" }, 404);
+      }
+      return handleETLIngest(req, env, identity, json);
+    }
+
+    if (path === "/v1/recovery/diagnose" && req.method === "POST") {
+      if (!env.RECOVERY_WORKFLOW || !env.MISSION_TOKEN_PUBLIC_KEY) {
+        return json({ ok: false, error: "recovery_workflow_or_token_key_unavailable" }, 503);
+      }
+      const body = await req.json<any>().catch(() => null);
+      if (!body || typeof body.mission_token !== "string" ||
+          typeof body.origin !== "string" || typeof body.pool_id !== "string" ||
+          !body.pool_id.trim() || body.pool_id.length > 128 ||
+          !Number.isSafeInteger(body.error_code) ||
+          !["low", "medium", "high", "critical"].includes(body.severity)) {
+        return json({ ok: false, error: "invalid_recovery_request" }, 400);
+      }
+      if (!isAllowedRecoveryOrigin(body.origin, env.RECOVERY_ALLOWED_ORIGINS)) {
+        return json({ ok: false, error: "recovery_origin_not_allowlisted" }, 403);
+      }
+      let claims;
+      try {
+        const verifier = await MissionTokenVerifier.fromBase64UrlPublicKey(
+          env.MISSION_TOKEN_PUBLIC_KEY
+        );
+        claims = await verifier.verify(body.mission_token);
+      } catch {
+        return json({ ok: false, error: "mission_token_invalid" }, 403);
+      }
+      // Bind the signed delegation to the independently authenticated API caller.
+      if (claims.sub !== identity.actor || claims.tenantId !== identity.tenant ||
+          claims.action !== "recovery_diagnosis") {
+        return json({ ok: false, error: "mission_token_identity_mismatch" }, 403);
+      }
+      const poolId = body.pool_id.slice(0, 128);
+      const missionHash = await hashRecoveryMission({
+        missionId: claims.missionId,
+        origin: body.origin,
+        poolId,
+        errorCode: body.error_code,
+        severity: body.severity,
+      });
+      if (missionHash !== claims.missionHash) {
+        return json({ ok: false, error: "mission_token_payload_mismatch" }, 403);
+      }
+      const mission = {
+        id: claims.missionId,
+        origin: body.origin,
+        pool_id: poolId,
+        error_code: body.error_code,
+        severity: body.severity,
+        created_at: Date.now(),
+        created_by: identity.actor,
+        mission_token: body.mission_token,
+      };
+      try {
+        const instance = await env.RECOVERY_WORKFLOW.create({
+          id: crypto.randomUUID(),
+          params: mission,
+        });
+        return json({ ok: true, workflow_id: instance.id, status: "accepted" }, 202);
+      } catch {
+        return json({ ok: false, error: "recovery_workflow_start_failed" }, 503);
+      }
+    }
+
+    if (path === "/v1/audit/anchor/verify" && req.method === "POST") {
+      if (!env.SAFETY) return json({ ok: false, error: "audit_safety_binding_unavailable" }, 503);
+      if (identity.method === "public" || !identity.tenant?.trim() || !identity.actor?.trim()) {
+        return json({ ok: false, error: "verified_identity_required" }, 403);
+      }
+      const body = await req.json<{ event_count: number }>().catch(() => null);
+      if (!body || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return json({ ok: false, error: "invalid_anchor_reference" }, 400);
+      const assertion = await createWorkerInternalAssertion(env, "safety-interlock", identity);
+      if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+      const stub = env.SAFETY.get(env.SAFETY.idFromName("audit:" + identity.tenant));
+      const response = await stub.fetch("https://safety.internal/audit/anchor/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...assertion.headers },
+        body: JSON.stringify({ tenant: identity.tenant, event_count: body.event_count }),
+      });
+      return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS } });
+    }
+
+    if (path === "/" || path === "/health") {
+      return json({
+        ok: true,
+        service: "ASTON OS",
+        product: "Aston Risk Fabric",
+        ts: Date.now(),
+        version: VERSION,
+        profile: env.DEPLOY_PROFILE ?? "21.6.3-cf-audit",
+        pillars: pillarStatus(env),
+        bindings: {
+          ai: !!env.AI,
+          session: !!env.SESSION,
+          db: !!env.DB,
+          etl_queue: !!env.ETL_QUEUE,
+        },
+        risk: {
+          assess: "/v1/risk/assess",
+          underwrite: "/v1/risk/underwrite",
+          envelopes: "/v1/risk/envelopes",
+          status: "/v1/risk/status",
+        },
+        agents: { plans: "/v1/agents/plans" },
+        tagline: "Models think. Agents act. Aston decides how much trust they deserve.",
+        chat_model: env.CHAT_MODEL,
+        ai_bound: !!env.AI,
+        skills: [
+          "risk-envelope-v1",
+          "arr-assess",
+          "governed-agents-exposure",
+          "decision-provenance",
+          "chat",
+        ],
+      });
+    }
+
+    if (path === "/v1/capabilities" && req.method === "GET") {
+      return json({
+        ok: true,
+        version: VERSION,
+        pillars: pillarStatus(env),
+        risk_fabric: true,
+        risk_envelope_v1: true,
+        governed_agents: true,
+        decision_provenance: true,
+      });
+    }
+
+    if (path === "/v1/models" && req.method === "GET") {
+      return json({
+        ok: true,
+        chat_default: env.CHAT_MODEL,
+        embed: env.EMBED_MODEL,
+        tts: TTS_MODELS,
+        voice_profiles: Object.keys(VOICE_PROFILES),
+        version: VERSION,
+      });
+    }
+
+    if ((path === "/chat" || path === "/v1/chat") && req.method === "POST") {
+      return handleChat(req, env, false);
+    }
+    if ((path === "/v1/chat/stream" || path === "/chat/stream") && req.method === "POST") {
+      return handleChatStream(req, env);
+    }
+    if (path === "/v1/solve" && req.method === "POST") return handleChat(req, env, true);
+    if ((path === "/v1/tts" || path === "/v1/speech") && req.method === "POST") return handleTts(req, env, identity);
+    if (path === "/v1/voice" && req.method === "POST") return handleVoice(req, env, identity);
+    if (path === "/v1/voice/profiles" && req.method === "GET") {
+      return json({
+        ok: true,
+        default: "aston_executive",
+        profiles: Object.values(VOICE_PROFILES),
+        version: VERSION,
+      });
+    }
+    if (path === "/v1/validate" && req.method === "POST") {
+      const body = await req.json<any>().catch(() => ({}));
+      const accountId =
+        (typeof body.account_id === "string" && body.account_id.trim()) ||
+        (typeof body.id === "string" && body.id.trim()) ||
+        "";
+      if (!accountId) return json({ ok: false, error: "account_id required" }, 400);
+      // Do not claim an account is active until a trusted billing/identity
+      // provider is configured and its response is verified.
+      return json({
+        ok: false,
+        valid: false,
+        account_id: accountId,
+        error: "account_validation_not_configured",
+        version: VERSION,
+      }, 503);
+    }
+
+    const engineering = await handleEngineering(path, req, env, identity, json);
+    if (engineering) return engineering;
+
+    const risk = await handleRisk(path, req, env, identity, json);
+    if (risk) return risk;
+
+    const agents = await handleGovernedAgents(path, req, env, identity, json);
+    if (agents) return agents;
+
+    const provenance = await handleProvenance(path, req, env, identity, json);
+    if (provenance) return provenance;
+
+    const infra = await handleInfra(path, req, env, identity, json);
+    if (infra) return infra;
+
+    const economy = await handleEconomy(path, req, env, identity, json);
+    if (economy) return economy;
+
+    const defense = await handleDefense(path, req, env, identity, json);
+    if (defense) return defense;
+
+    const factory = await handleFactory(path, req, env, identity, json);
+    if (factory) return factory;
+
+    const sov = await handleSovereign(path, req, env, identity, json);
+    if (sov) return sov;
+
+    const v21 = await handleV21(path, req, env, identity, json);
+    if (v21) return v21;
+
+    return json({ error: "not found", version: VERSION }, 404);
+  },
+  // ETL queue processing is wired here; queue consumers remain explicitly configured
+  // per environment so this change does not activate production consumption.
+  async queue(batch: MessageBatch<any>, env: Env): Promise<void> {
+    await handleETLQueue(batch, env);
+  },
+} satisfies ExportedHandler<Env>;
+
