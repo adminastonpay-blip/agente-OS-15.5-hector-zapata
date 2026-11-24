@@ -27,7 +27,10 @@ function harness(seed: Stored) {
     exec<T>(query:string,...args:any[]) {
       const q=query.replace(/\\s+/g," ").trim();
       let rows:any[]=[]; let rowsWritten=0;
-      if(q.startsWith("SELECT *, json_extract(identity_json")) {
+      if(q.startsWith("SELECT COUNT(*) AS cnt FROM sqlite_master")) {
+        // This focused lease harness intentionally has no Gate A principal tables.
+        rows=[{cnt:0}];
+      } else if(q.startsWith("SELECT *, json_extract(identity_json")) {
         const row=approvals.get(String(args[0]));
         rows=row?[{...row,tenant_id:JSON.parse(row.identity_json).tenant}]:[];
       } else if(q.startsWith("SELECT event_hash FROM audit_events")) {
