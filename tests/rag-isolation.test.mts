@@ -37,6 +37,8 @@ function inferenceEnv() {
   return {
     EMBED_MODEL: "@cf/baai/bge-m3",
     CHAT_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8",
+    INTERNAL_ASSERTION_SECRET: "test-only-internal-assertion-secret-32-bytes-minimum",
+    INTERNAL_ASSERTION_KEY_ID: "test-key-v1",
     SAFETY: {
       idFromName: (_name: string) => "mock-safety",
       get: (_id: string) => safetyStub,
