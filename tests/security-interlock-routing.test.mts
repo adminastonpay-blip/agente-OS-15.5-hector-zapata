@@ -13,7 +13,8 @@ test("chat route uses the Control Gate and one-use Model Runner permit", () => {
   const end = source.indexOf('if (path.startsWith("/v21/")', start);
   assert.ok(start >= 0 && end > start, "inline chat route must exist");
   const handler = source.slice(start, end);
-  assert.match(handler, /new ControlGate\(env\)\.authorizeChat\(identity, messages\)/);
+  assert.match(handler, /const gate = new ControlGate\(env\)/);
+  assert.match(handler, /gate\.authorizeChat\(identity, messages\)/);
   assert.match(handler, /runner\.runChat\(decision\.permit, messages/);
   assert.match(handler, /if \(!decision\.ok\)/);
   assert.match(handler, /isOutputSafeForCredentialLeak\(answer\)/);
