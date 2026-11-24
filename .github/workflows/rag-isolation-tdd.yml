@@ -3,7 +3,11 @@ name: RAG Tenant Isolation TDD
 on:
   push:
     branches:
+      - feat/aston-single-worker-rag-attestation
       - feat/rag-tenant-isolation
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:

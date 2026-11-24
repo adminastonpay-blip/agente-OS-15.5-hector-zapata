@@ -3,6 +3,23 @@ import { createObject } from "../ontology";
 import { maskForAgent, restoreFromVault } from "../pii";
 import { embed, chat } from "../lib/ai";
 
+/**
+ * Every agent retrieval is scoped to the authenticated tenant twice:
+ * Vectorize namespace + metadata predicate. Never accept caller-supplied scope.
+ */
+export function buildTenantVectorQueryOptions(identity: Identity, topK = 3) {
+  const tenant = identity.tenant?.trim();
+  if (!tenant || new TextEncoder().encode(tenant).byteLength > 64) {
+    throw new Error("valid_authenticated_tenant_required");
+  }
+  return {
+    topK: Math.min(20, Math.max(1, Math.floor(Number.isFinite(topK) ? topK : 3))),
+    returnMetadata: "all" as const,
+    namespace: tenant,
+    filter: { tenant: { $eq: tenant } },
+  };
+}
+
 export class AgentNode {
   constructor(private state: DurableObjectState, private env: Env) {}
 
@@ -186,7 +203,7 @@ export class AgentNode {
     if (c.tool === "search") {
       if (!this.env.VECTORIZE) return "search unavailable (VECTORIZE not bound)";
       const [qvec] = await embed(this.env, identity, [c.args?.query || ""]);
-      const m = await this.env.VECTORIZE.query(qvec, { topK: 3, returnMetadata: "all" } as any);
+      const m = await this.env.VECTORIZE.query(qvec, buildTenantVectorQueryOptions(identity) as any);
       return (m.matches ?? [])
         .map((x: any) => `[${x.metadata?.source}] ${x.metadata?.chunk}`)
         .join("\n");
