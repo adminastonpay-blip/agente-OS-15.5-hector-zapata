@@ -112,6 +112,18 @@ export async function importEd25519PublicKey(raw: Uint8Array): Promise<CryptoKey
   return crypto.subtle.importKey("raw", raw, ED25519, false, ["verify"]);
 }
 
+function signingStatement(fields: {
+  schema_version: "1.0.0";
+  attestation_id: string;
+  algorithm: "Ed25519";
+  key_id: string;
+  payload_digest: { algorithm: "sha-256"; value: string };
+  payload: JsonValue;
+  signed_at: string;
+}): Uint8Array {
+  return encoder.encode(canonicalizeJson(fields));
+}
+
 export async function signAttestation(
   payload: unknown,
   privateKey: CryptoKey,
@@ -125,16 +137,20 @@ export async function signAttestation(
   const canonicalPayload = canonicalizeJson(payload);
   const bytes = encoder.encode(canonicalPayload);
   const digest = await sha256Hex(bytes);
-  const signature = await crypto.subtle.sign(ED25519, privateKey, bytes);
-  return {
-    schema_version: "1.0.0",
+  const signedAtIso = new Date(signedAt).toISOString();
+  const statement = {
+    schema_version: "1.0.0" as const,
     attestation_id: attestationId,
-    algorithm: "Ed25519",
+    algorithm: "Ed25519" as const,
     key_id: keyId,
-    payload_digest: { algorithm: "sha-256", value: digest },
+    payload_digest: { algorithm: "sha-256" as const, value: digest },
     payload: JSON.parse(canonicalPayload) as JsonValue,
+    signed_at: signedAtIso,
+  };
+  const signature = await crypto.subtle.sign(ED25519, privateKey, signingStatement(statement));
+  return {
+    ...statement,
     signature: toBase64Url(new Uint8Array(signature)),
-    signed_at: new Date(signedAt).toISOString(),
     transparency: { anchor_status: "not_submitted" },
   };
 }
@@ -153,12 +169,21 @@ export async function verifyAttestation(
       !/^[a-f0-9]{64}$/.test(envelope.payload_digest.value) ||
       !Number.isFinite(Date.parse(envelope.signed_at))
     ) return false;
-    const bytes = encoder.encode(canonicalizeJson(envelope.payload));
-    const digest = await sha256Hex(bytes);
+    const payloadBytes = encoder.encode(canonicalizeJson(envelope.payload));
+    const digest = await sha256Hex(payloadBytes);
     if (digest !== envelope.payload_digest.value) return false;
+    const statement = {
+      schema_version: envelope.schema_version,
+      attestation_id: envelope.attestation_id,
+      algorithm: envelope.algorithm,
+      key_id: envelope.key_id,
+      payload_digest: envelope.payload_digest,
+      payload: envelope.payload,
+      signed_at: new Date(envelope.signed_at).toISOString(),
+    };
     const signature = fromBase64Url(envelope.signature);
     if (signature.byteLength !== 64) return false;
-    return await crypto.subtle.verify(ED25519, publicKey, signature, bytes);
+    return await crypto.subtle.verify(ED25519, publicKey, signature, signingStatement(statement));
   } catch {
     return false;
   }
