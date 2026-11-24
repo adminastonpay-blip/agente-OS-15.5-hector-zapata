@@ -11,6 +11,7 @@ class FakeSqlStorage {
   attestations: Row[] = [];
   columns = new Set(["id","action_json","identity_json","policy_json","created_at","expires_at","status","decided_by","decided_at"]);
   triggers = new Set<string>();
+  tables = new Set<string>();
 
   exec<T extends Record<string, any>>(query: string, ...args: any[]) {
     const q = query.replace(/\s+/g, " ").trim();
@@ -21,6 +22,16 @@ class FakeSqlStorage {
       const match = q.match(/TRIGGER IF NOT EXISTS ([a-zA-Z0-9_]+)/);
       if (match) this.triggers.add(match[1]);
     } else if (/^CREATE TABLE|^CREATE INDEX/i.test(q)) {
+      const table = q.match(/^CREATE TABLE IF NOT EXISTS ([a-z_]+)/i)?.[1];
+      if (table) this.tables.add(table);
+      rows = [];
+    } else if (q.startsWith("SELECT COUNT(*) AS cnt FROM sqlite_master")) {
+      rows = [{ cnt: this.tables.has(String(args[0])) ? 1 : 0 }];
+    } else if (q.startsWith("SELECT status FROM tenants")) {
+      rows = [];
+    } else if (q.startsWith("SELECT status FROM agents")) {
+      rows = [];
+    } else if (q.startsWith("SELECT status, expires_at, tenant_id, agent_id FROM agent_credentials")) {
       rows = [];
     } else if (q.startsWith("PRAGMA table_info(pending_approvals)")) {
       rows = [...this.columns].map((name) => ({ name }));
@@ -33,6 +44,20 @@ class FakeSqlStorage {
           else row[match[1]] = null;
         }
       }
+    } else if (q.startsWith("SELECT id, identity_json FROM pending_approvals")) {
+      rows = [...this.pending.values()]
+        .filter((r) => ["pending", "processing"].includes(String(r.status)) &&
+          (!r.agent_id || !r.credential_id))
+        .map((r) => ({ id: r.id, identity_json: r.identity_json }));
+    } else if (q.startsWith("UPDATE pending_approvals SET status = 'EXPIRED_LEGACY_UNBOUND'")) {
+      const [migratedAt] = args;
+      for (const row of this.pending.values()) {
+        if (["pending", "processing"].includes(String(row.status)) && (!row.agent_id || !row.credential_id)) {
+          Object.assign(row, { status: "EXPIRED_LEGACY_UNBOUND", lease_id: null, lease_expires_at: null,
+            decided_at: row.decided_at ?? migratedAt });
+        }
+      }
+      rowsWritten = 1;
     } else if (q.startsWith("SELECT event_hash FROM audit_events")) {
       const tenant = String(args[0]);
       const last = this.audit.filter((r) => r.tenant === tenant).at(-1);
@@ -47,10 +72,11 @@ class FakeSqlStorage {
       rowsWritten = 1;
     } else if (q.startsWith("INSERT INTO pending_approvals")) {
       const [id, action_json, identity_json, policy_json, created_at, expires_at] = args;
+      const [agent_id, credential_id] = args.slice(6);
       this.pending.set(String(id), {
         id, action_json, identity_json, policy_json, created_at, expires_at, status: "pending",
         decided_by: null, decided_at: null, lease_id: null, lease_expires_at: null,
-        processing_attempt: 0, fencing_token: 0,
+        processing_attempt: 0, fencing_token: 0, agent_id: agent_id ?? null, credential_id: credential_id ?? null,
       });
       rowsWritten = 1;
     } else if (q.startsWith("SELECT *, json_extract(identity_json") || q.startsWith("SELECT * FROM pending_approvals WHERE id = ?")) {
@@ -83,6 +109,7 @@ class FakeSqlStorage {
     } else if (q.startsWith("INSERT INTO execution_log")) {
       const [ts, action_tool, decision, risk, score, actor, detail] = args;
       this.logs.push({ ts, action_tool, decision, risk, score, actor, detail });
+      rowsWritten = 1;
     } else if (q.startsWith("SELECT id, action_json, policy_json, created_at, expires_at, status FROM pending_approvals")) {
       rows = [...this.pending.values()].filter((r) => r.status === "pending").slice(-50).reverse();
     } else if (q.startsWith("SELECT ts, action_tool, decision, risk, score, actor, detail FROM execution_log")) {
@@ -123,7 +150,7 @@ async function createInterlock(trustFetch: () => Promise<Response> = async () =>
   const privateKey = encode(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
   const publicKey = encode(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
   const trust = { idFromName() { return {}; }, get() { return { fetch: trustFetch }; } };
-  const env = { TRUST: trust, ATTESTATION_PRIVATE_KEY: privateKey, ATTESTATION_PUBLIC_KEY: publicKey, ATTESTATION_KEY_ID: "test-key-1" };
+  const env = { TRUST: trust, ATTESTATION_PRIVATE_KEY: privateKey, ATTESTATION_PUBLIC_KEY: publicKey, ATTESTATION_KEY_ID: "test-key-1", SAFETY_INTERLOCK_TEST_MODE: "true" };
   return { interlock: new SafetyInterlock(state, env as any), sql };
 }
 
@@ -247,7 +274,7 @@ test("AST-LEASE-MIGRATION: adds lease columns idempotently and preserves existin
     assert.ok(sql.columns.has(column), `missing migrated column: ${column}`);
   }
   assert.deepEqual([...sql.triggers].sort(), firstTriggerSet);
-  assert.equal(sql.pending.get(legacy.id)?.status, "pending");
+  assert.equal(sql.pending.get(legacy.id)?.status, "EXPIRED_LEGACY_UNBOUND");
   assert.equal(sql.pending.get(legacy.id)?.processing_attempt, 0);
   assert.equal(sql.pending.get(legacy.id)?.fencing_token, 0);
   assert.equal(sql.pending.get(legacy.id)?.identity_json, legacy.identity_json);
