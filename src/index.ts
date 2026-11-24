@@ -298,6 +298,37 @@ export default {
     const auditResponse = await handleStagingAudit(req, env, handleChat);
     if (auditResponse) return auditResponse;
     const identity = await resolveIdentity(req, env);
+    if (path.startsWith("/v1/trust/") && req.method === "POST") {
+      if (!env.TRUST) return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
+      if (identity.method === "public" || !identity.actor || !identity.tenant ||
+          !Array.isArray(identity.roles) || !identity.roles.includes("admin")) {
+        return json({ ok: false, error: "verified_tenant_admin_required" }, 403);
+      }
+      const allowedTrustRoutes = new Set([
+        "/v1/trust/roles/grant",
+        "/v1/trust/roles/revoke",
+        "/v1/trust/policies/set",
+      ]);
+      if (!allowedTrustRoutes.has(path)) return json({ ok: false, error: "not_found" }, 404);
+      const body = await req.json<any>().catch(() => null);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return json({ ok: false, error: "invalid_trust_request" }, 400);
+      }
+      try {
+        const stub = env.TRUST.get(env.TRUST.idFromName("tenant:" + identity.tenant));
+        const response = await stub.fetch("https://trust.internal" + path.replace("/v1/trust", ""), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, tenant: identity.tenant, identity }),
+        });
+        return new Response(response.body, {
+          status: response.status,
+          headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS },
+        });
+      } catch {
+        return json({ ok: false, error: "trust_fabric_unavailable" }, 503);
+      }
+    }
     const rate = await checkRequestRateLimit(
       env,
       identity,
