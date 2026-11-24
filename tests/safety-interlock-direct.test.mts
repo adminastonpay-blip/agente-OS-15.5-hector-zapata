@@ -39,7 +39,7 @@ class FakeSqlStorage {
     } else if (q.startsWith("UPDATE pending_approvals SET status = 'expired' WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
       if (row) row.status = "expired";
-    } else if (q.startsWith("INSERT INTO execution_log")) {
+    } else if (q.startsWith("INSERT INTO decision_attestations")) {\n      rows = [];\n    } else if (q.startsWith("INSERT INTO execution_log")) {
       const [ts, action_tool, decision, risk, score, actor, detail] = args;
       this.logs.push({ ts, action_tool, decision, risk, score, actor, detail });
     } else if (q.startsWith("SELECT id, action_json, policy_json, created_at, expires_at, status FROM pending_approvals")) {
@@ -55,7 +55,7 @@ class FakeSqlStorage {
   }
 }
 
-function createInterlock() {
+async function createInterlock() {
   const sql = new FakeSqlStorage();
   const state = {
     storage: {
@@ -64,7 +64,7 @@ function createInterlock() {
       async setAlarm(_when: number) {},
     },
   } as any;
-  return { interlock: new SafetyInterlock(state, {} as any), sql };
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);\n  const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/[+]/g, "-").replace(/[/]/g, "_");\n  const privateKey = encode(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));\n  const publicKey = encode(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));\n  const trust = { get() { return { async fetch() { return Response.json({ ok: true, effect: "allow", reason: "test_role_grant" }); } }; } };\n  const env = { TRUST: trust, ATTESTATION_PRIVATE_KEY: privateKey, ATTESTATION_PUBLIC_KEY: publicKey, ATTESTATION_KEY_ID: "test-key-1" };\n  return { interlock: new SafetyInterlock(state, env as any), sql };
 }
 
 const identity = {
@@ -76,7 +76,7 @@ const identity = {
 } as const;
 
 test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense mitigation and records approval", async () => {
-  const { interlock, sql } = createInterlock();
+  const { interlock, sql } = await createInterlock();
   const evaluate = await interlock.fetch(new Request("https://safety.internal/evaluate", {
     method: "POST",
     headers: { "content-type": "application/json" },
