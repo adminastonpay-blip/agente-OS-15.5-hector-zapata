@@ -221,4 +221,138 @@ export async function verifyInternalAssertion(
   expectedAud: string,
   nowMs = Date.now(),
   skewMs = 2_000
-): Promise<{ ok: true; claims: InternalAssertionClaims
+): Promise<{ ok: true; claims: InternalAssertionClaims } | { ok: false; reason: string }> {
+  try {
+    if (typeof token !== "string" || !expectedKeyId || !expectedAud) {
+      return { ok: false, reason: "internal_assertion_malformed" };
+    }
+    const parts = token.split(".");
+    if (parts.length !== 4 || parts[0] !== "v1") {
+      return { ok: false, reason: "internal_assertion_version_invalid" };
+    }
+    const [, kid, payloadB64, sigB64] = parts;
+    if (!kid || kid !== expectedKeyId) {
+      return { ok: false, reason: "internal_assertion_kid_mismatch" };
+    }
+    const sigBytes = fromBase64Url(sigB64);
+    if (sigBytes.byteLength !== 32) {
+      return { ok: false, reason: "internal_assertion_sig_length_invalid" };
+    }
+    const key = await importHmacSha256Key(secret);
+    const validSig = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      toArrayBuffer(sigBytes),
+      toArrayBuffer(encoder.encode(`${kid}.${payloadB64}`))
+    );
+    if (!validSig) {
+      return { ok: false, reason: "internal_assertion_signature_invalid" };
+    }
+    const claims = JSON.parse(decoder.decode(fromBase64Url(payloadB64))) as InternalAssertionClaims;
+    if (
+      !claims ||
+      typeof claims.iss !== "string" || !claims.iss ||
+      typeof claims.aud !== "string" || claims.aud !== expectedAud ||
+      typeof claims.sub_tenant !== "string" || !claims.sub_tenant ||
+      typeof claims.sub_actor !== "string" || !claims.sub_actor ||
+      typeof claims.jti !== "string" || !claims.jti ||
+      !Number.isSafeInteger(claims.iat) ||
+      !Number.isSafeInteger(claims.exp)
+    ) {
+      return { ok: false, reason: "internal_assertion_claims_invalid" };
+    }
+    const ttl = claims.exp - claims.iat;
+    if (ttl <= 0 || ttl > MAX_INTERNAL_ASSERTION_TTL_MS) {
+      return { ok: false, reason: "internal_assertion_ttl_out_of_bounds" };
+    }
+    if (claims.iat > nowMs + skewMs) {
+      return { ok: false, reason: "internal_assertion_not_yet_valid" };
+    }
+    if (claims.exp <= nowMs - skewMs) {
+      return { ok: false, reason: "internal_assertion_expired" };
+    }
+    return { ok: true, claims };
+  } catch {
+    return { ok: false, reason: "internal_assertion_verification_failed" };
+  }
+}
+
+function signingStatement(fields: {
+  schema_version: "1.0.0";
+  attestation_id: string;
+  algorithm: "Ed25519";
+  key_id: string;
+  payload_digest: { algorithm: "sha-256"; value: string };
+  payload: JsonValue;
+  signed_at: string;
+}): Uint8Array {
+  return encoder.encode(canonicalizeJson(fields));
+}
+
+export async function signAttestation(
+  payload: unknown,
+  privateKey: CryptoKey,
+  keyId: string,
+  attestationId: string,
+  signedAt = new Date().toISOString(),
+): Promise<AttestationEnvelope> {
+  if (!keyId || keyId.length > 1024) throw new TypeError("attestation_invalid_key_id");
+  if (!attestationId || attestationId.length > 256) throw new TypeError("attestation_invalid_id");
+  if (!Number.isFinite(Date.parse(signedAt))) throw new TypeError("attestation_invalid_signed_at");
+  const canonicalPayload = canonicalizeJson(payload);
+  const bytes = encoder.encode(canonicalPayload);
+  const digest = await sha256Hex(bytes);
+  const signedAtIso = new Date(signedAt).toISOString();
+  const statement = {
+    schema_version: "1.0.0" as const,
+    attestation_id: attestationId,
+    algorithm: "Ed25519" as const,
+    key_id: keyId,
+    payload_digest: { algorithm: "sha-256" as const, value: digest },
+    payload: JSON.parse(canonicalPayload) as JsonValue,
+    signed_at: signedAtIso,
+  };
+  const signature = await crypto.subtle.sign(ED25519, privateKey, toArrayBuffer(signingStatement(statement)));
+  return {
+    ...statement,
+    signature: toBase64Url(new Uint8Array(signature)),
+    transparency: { anchor_status: "not_submitted" },
+  };
+}
+
+export async function verifyAttestation(
+  envelope: AttestationEnvelope,
+  publicKey: CryptoKey,
+): Promise<boolean> {
+  try {
+    if (
+      !envelope ||
+      envelope.schema_version !== "1.0.0" ||
+      envelope.algorithm !== "Ed25519" ||
+      !envelope.attestation_id || envelope.attestation_id.length > 256 ||
+      !envelope.key_id || envelope.key_id.length > 1024 ||
+      envelope.transparency?.anchor_status !== "not_submitted" ||
+      envelope.payload_digest?.algorithm !== "sha-256" ||
+      !/^[a-f0-9]{64}$/.test(envelope.payload_digest.value) ||
+      !Number.isFinite(Date.parse(envelope.signed_at))
+    ) return false;
+    const payloadBytes = encoder.encode(canonicalizeJson(envelope.payload));
+    const digest = await sha256Hex(payloadBytes);
+    if (digest !== envelope.payload_digest.value) return false;
+    const statement = {
+      schema_version: envelope.schema_version,
+      attestation_id: envelope.attestation_id,
+      algorithm: envelope.algorithm,
+      key_id: envelope.key_id,
+      payload_digest: envelope.payload_digest,
+      payload: envelope.payload,
+      signed_at: new Date(envelope.signed_at).toISOString(),
+    };
+    const signature = fromBase64Url(envelope.signature);
+    if (signature.byteLength !== 64) return false;
+    return await crypto.subtle.verify(ED25519, publicKey, toArrayBuffer(signature), toArrayBuffer(signingStatement(statement)));
+  } catch {
+    return false;
+  }
+}
+
