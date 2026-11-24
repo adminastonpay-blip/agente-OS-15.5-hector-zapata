@@ -234,13 +234,20 @@ export class SafetyInterlock {
     }
 
     if (u.pathname === "/decide" && req.method === "POST") {
-      const { approval_id, approved, operator } = await req.json<{
+      const body = await req.json<{
         approval_id: string;
         approved: boolean;
-        operator: string;
-      }>();
+        identity: Identity;
+      }>().catch(() => null);
+      if (!body || typeof body.approval_id !== "string" || typeof body.approved !== "boolean" ||
+          !body.identity || body.identity.method === "public" ||
+          !Array.isArray(body.identity.roles) ||
+          !(body.identity.roles.includes("admin") || body.identity.roles.includes("approver")) ||
+          !body.identity.actor || !body.identity.tenant) {
+        return Response.json({ ok: false, error: "verified_approver_identity_required" }, { status: 403 });
+      }
       try {
-        return Response.json(await this.decide(approval_id, approved, operator));
+        return Response.json(await this.decide(body.approval_id, body.approved, body.identity));
       } catch {
         return Response.json({ ok: false, error: "decision_attestation_unavailable" }, { status: 503 });
       }
@@ -437,7 +444,7 @@ export class SafetyInterlock {
     };
   }
 
-  private async decide(approvalId: string, approved: boolean, operator: string) {
+  private async decide(approvalId: string, approved: boolean, operatorIdentity: Identity) {
     const row = this.sql.exec("SELECT * FROM pending_approvals WHERE id = ?", approvalId).toArray()[0] as any;
     if (!row) return { error: "approval not found", status: 404 };
     if (row.status !== "pending") return { error: `already ${row.status}`, status: 409 };
@@ -450,6 +457,11 @@ export class SafetyInterlock {
     }
 
     const originalIdentity = JSON.parse(row.identity_json) as Identity;
+    if (operatorIdentity.tenant !== originalIdentity.tenant || operatorIdentity.method === "public" ||
+        !(operatorIdentity.roles.includes("admin") || operatorIdentity.roles.includes("approver"))) {
+      return { error: "verified_same_tenant_approver_required", status: 403 };
+    }
+    const operator = operatorIdentity.actor;
     const action = JSON.parse(row.action_json) as ProposedAction;
     const policy = JSON.parse(row.policy_json) as PolicyResult;
     const newStatus = approved ? "approved" : "rejected";
