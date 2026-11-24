@@ -375,7 +375,9 @@ export class SafetyInterlock {
   }
 
   private async evaluateAndGate(action: ProposedAction, identity: Identity) {
-    if (!action || typeof action.tool !== "string" || !identity?.tenant || !identity.actor) {
+    if (!action || typeof action.tool !== "string" || !identity?.tenant || !identity.actor ||
+        identity.method === "public" || !Array.isArray(identity.roles) ||
+        !["public", "internal", "confidential", "secret"].includes(identity.clearance)) {
       throw new Error("invalid_safety_decision_input");
     }
     const trust = await this.authorizeTrustFabric(action, identity);
