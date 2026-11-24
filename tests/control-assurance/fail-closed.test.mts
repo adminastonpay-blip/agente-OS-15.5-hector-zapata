@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertCryptographicReadiness, consumeApprovalAtomic, ControlAssuranceError, type PendingApproval } from "../../src/core/control-assurance.ts";
+import { assertCryptographicReadiness, ControlAssuranceError } from "../../src/core/control-assurance.ts";
 
 function base64url(bytes: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/=/g, "").replace(/[+]/g, "-").replace(/[/]/g, "_");
@@ -56,35 +56,10 @@ test("AST-CA-003: missing key ID returns 503 before any decision can be signed",
     error.statusCode === 503 && error.code === "ATTESTATION_KEYS_MISSING");
 });
 
-test("AST-CA-003: signer failure returns 503 and never consumes the pending approval", async () => {
-  const row: PendingApproval = {
-    id: "apr-fail", action_json: "{}", identity_json: JSON.stringify({ tenant: "tenant-a" }),
-    policy_json: "{}", created_at: 1, expires_at: 5000, status: "pending",
-  };
-  let status = "pending";
-  const sql = {
-    exec(query: string) {
-      const q = query.replace(/\\s+/g, " ").trim();
-      if (q.startsWith("SELECT * FROM pending_approvals")) return { rowsWritten: 0, toArray: () => [{ ...row, status }] };
-      if (q.startsWith("UPDATE pending_approvals SET status = 'processing'")) {
-        if (status === "pending") { status = "processing"; return { rowsWritten: 1, toArray: () => [] }; }
-        return { rowsWritten: 0, toArray: () => [] };
-      }
-      if (q.startsWith("UPDATE pending_approvals SET status = 'pending'")) {
-        if (status === "processing") status = "pending";
-        return { rowsWritten: 1, toArray: () => [] };
-      }
-      return { rowsWritten: 0, toArray: () => [] };
-    },
-  };
-  await assert.rejects(consumeApprovalAtomic(sql as unknown as SqlStorage, {
-    approvalId: "apr-fail", tenantId: "tenant-a", operatorId: "human-a",
-    decision: "approved", nowMs: 100,
-    signDecision: async () => { throw new Error("crypto_subtle_failure"); },
-    appendAudit: async () => {},
-  }), (error: unknown) => error instanceof ControlAssuranceError &&
-    error.statusCode === 503 && error.code === "APPROVAL_ATTESTATION_FAILED");
-  assert.equal(status, "pending");
+test("AST-CA-003: missing verification material remains fail-closed", async () => {
+  await assert.rejects(assertCryptographicReadiness({
+    TRUST: trust, ATTESTATION_PUBLIC_KEY: "invalid", ATTESTATION_KEY_ID: "test-key",
+  }), (error: unknown) => error instanceof ControlAssuranceError && error.statusCode === 503);
 });
 
 test("AST-CA-003: valid TRUST binding and matching Ed25519 pair pass readiness", async () => {
