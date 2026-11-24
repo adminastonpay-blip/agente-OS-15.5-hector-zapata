@@ -141,7 +141,7 @@ function emitSpan(
 export async function withRequestSpan(
   request: Request,
   env: RequestSpanEnv,
-  next: () => Promise<Response>,
+  next: (context: TraceContext) => Promise<Response>,
 ): Promise<Response> {
   const context = createTraceContext(request);
   const startedAt = new Date().toISOString();
@@ -149,7 +149,7 @@ export async function withRequestSpan(
   let response: Response;
 
   try {
-    response = await next();
+    response = await next(context);
   } catch {
     response = Response.json({
       ok: false,
