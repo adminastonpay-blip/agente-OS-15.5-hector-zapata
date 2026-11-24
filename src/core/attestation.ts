@@ -26,7 +26,30 @@ export interface AttestationEnvelope {
   transparency: { anchor_status: "not_submitted" };
 }
 
+export interface InternalAssertionClaims {
+  iss: string;
+  aud: string;
+  sub_tenant: string;
+  sub_actor: string;
+  sub_agent?: string;
+  sub_credential?: string;
+  jti: string;
+  iat: number;
+  exp: number;
+}
+
+export interface InternalAssertionEnvelope {
+  v: 1;
+  alg: "HS256";
+  kid: string;
+  claims: InternalAssertionClaims;
+  sig: string;
+}
+
+export const MAX_INTERNAL_ASSERTION_TTL_MS = 15_000;
+
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 const ED25519: any = { name: "Ed25519" };
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -89,13 +112,13 @@ export async function sha256Hex(input: string | Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function toBase64Url(bytes: Uint8Array): string {
+export function toBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/=/g, "").replace(/[+]/g, "-").replace(/[/]/g, "_");
 }
 
-function fromBase64Url(value: string): Uint8Array {
+export function fromBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new TypeError("attestation_invalid_base64url");
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
@@ -118,81 +141,84 @@ export async function importEd25519PublicKey(raw: Uint8Array): Promise<CryptoKey
   return crypto.subtle.importKey("raw", toArrayBuffer(raw), ED25519, false, ["verify"]);
 }
 
-function signingStatement(fields: {
-  schema_version: "1.0.0";
-  attestation_id: string;
-  algorithm: "Ed25519";
-  key_id: string;
-  payload_digest: { algorithm: "sha-256"; value: string };
-  payload: JsonValue;
-  signed_at: string;
-}): Uint8Array {
-  return encoder.encode(canonicalizeJson(fields));
-}
-
-export async function signAttestation(
-  payload: unknown,
-  privateKey: CryptoKey,
-  keyId: string,
-  attestationId: string,
-  signedAt = new Date().toISOString(),
-): Promise<AttestationEnvelope> {
-  if (!keyId || keyId.length > 1024) throw new TypeError("attestation_invalid_key_id");
-  if (!attestationId || attestationId.length > 256) throw new TypeError("attestation_invalid_id");
-  if (!Number.isFinite(Date.parse(signedAt))) throw new TypeError("attestation_invalid_signed_at");
-  const canonicalPayload = canonicalizeJson(payload);
-  const bytes = encoder.encode(canonicalPayload);
-  const digest = await sha256Hex(bytes);
-  const signedAtIso = new Date(signedAt).toISOString();
-  const statement = {
-    schema_version: "1.0.0" as const,
-    attestation_id: attestationId,
-    algorithm: "Ed25519" as const,
-    key_id: keyId,
-    payload_digest: { algorithm: "sha-256" as const, value: digest },
-    payload: JSON.parse(canonicalPayload) as JsonValue,
-    signed_at: signedAtIso,
-  };
-  const signature = await crypto.subtle.sign(ED25519, privateKey, toArrayBuffer(signingStatement(statement)));
-  return {
-    ...statement,
-    signature: toBase64Url(new Uint8Array(signature)),
-    transparency: { anchor_status: "not_submitted" },
-  };
-}
-
-export async function verifyAttestation(
-  envelope: AttestationEnvelope,
+/** Verify an Ed25519 Proof-of-Possession signature over canonical JSON or raw bytes. */
+export async function verifyEd25519ProofOfPossession(
   publicKey: CryptoKey,
+  message: unknown | Uint8Array,
+  signatureBase64Url: string
 ): Promise<boolean> {
   try {
-    if (
-      !envelope ||
-      envelope.schema_version !== "1.0.0" ||
-      envelope.algorithm !== "Ed25519" ||
-      !envelope.attestation_id || envelope.attestation_id.length > 256 ||
-      !envelope.key_id || envelope.key_id.length > 1024 ||
-      envelope.transparency?.anchor_status !== "not_submitted" ||
-      envelope.payload_digest?.algorithm !== "sha-256" ||
-      !/^[a-f0-9]{64}$/.test(envelope.payload_digest.value) ||
-      !Number.isFinite(Date.parse(envelope.signed_at))
-    ) return false;
-    const payloadBytes = encoder.encode(canonicalizeJson(envelope.payload));
-    const digest = await sha256Hex(payloadBytes);
-    if (digest !== envelope.payload_digest.value) return false;
-    const statement = {
-      schema_version: envelope.schema_version,
-      attestation_id: envelope.attestation_id,
-      algorithm: envelope.algorithm,
-      key_id: envelope.key_id,
-      payload_digest: envelope.payload_digest,
-      payload: envelope.payload,
-      signed_at: new Date(envelope.signed_at).toISOString(),
-    };
-    const signature = fromBase64Url(envelope.signature);
-    if (signature.byteLength !== 64) return false;
-    return await crypto.subtle.verify(ED25519, publicKey, toArrayBuffer(signature), toArrayBuffer(signingStatement(statement)));
+    if (!publicKey || typeof signatureBase64Url !== "string" || !signatureBase64Url) return false;
+    const sigBytes = fromBase64Url(signatureBase64Url);
+    if (sigBytes.byteLength !== 64) return false;
+    const msgBytes = message instanceof Uint8Array
+      ? message
+      : encoder.encode(canonicalizeJson(message));
+    return await crypto.subtle.verify(ED25519, publicKey, toArrayBuffer(sigBytes), toArrayBuffer(msgBytes));
   } catch {
     return false;
   }
 }
+
+async function importHmacSha256Key(secret: string): Promise<CryptoKey> {
+  if (typeof secret !== "string" || secret.length < 16) {
+    throw new TypeError("internal_assertion_secret_invalid");
+  }
+  return crypto.subtle.importKey(
+    "raw",
+    toArrayBuffer(encoder.encode(secret)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"]
+  );
+}
+
+/** Sign a short-lived internal assertion (TTL <= 15s) bound to keyId and audience. */
+export async function signInternalAssertion(
+  claims: Omit<InternalAssertionClaims, "iat" | "exp" | "jti"> & {
+    jti?: string;
+    iat?: number;
+    ttlMs?: number;
+  },
+  secret: string,
+  keyId: string
+): Promise<string> {
+  if (!keyId || keyId.length > 256) throw new TypeError("internal_assertion_invalid_kid");
+  if (!claims.iss || !claims.aud || !claims.sub_tenant || !claims.sub_actor) {
+    throw new TypeError("internal_assertion_missing_claims");
+  }
+  const ttlMs = claims.ttlMs ?? MAX_INTERNAL_ASSERTION_TTL_MS;
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > MAX_INTERNAL_ASSERTION_TTL_MS) {
+    throw new RangeError("internal_assertion_ttl_exceeds_15s");
+  }
+  const nowMs = claims.iat ?? Date.now();
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0) {
+    throw new TypeError("internal_assertion_invalid_iat");
+  }
+  const fullClaims: InternalAssertionClaims = {
+    iss: claims.iss,
+    aud: claims.aud,
+    sub_tenant: claims.sub_tenant,
+    sub_actor: claims.sub_actor,
+    ...(claims.sub_agent ? { sub_agent: claims.sub_agent } : {}),
+    ...(claims.sub_credential ? { sub_credential: claims.sub_credential } : {}),
+    jti: claims.jti ?? crypto.randomUUID(),
+    iat: nowMs,
+    exp: nowMs + ttlMs,
+  };
+  const payloadB64 = toBase64Url(encoder.encode(canonicalizeJson(fullClaims)));
+  const headerAndPayload = `${keyId}.${payloadB64}`;
+  const key = await importHmacSha256Key(secret);
+  const sigBuf = await crypto.subtle.sign("HMAC", key, toArrayBuffer(encoder.encode(headerAndPayload)));
+  return `v1.${headerAndPayload}.${toBase64Url(new Uint8Array(sigBuf))}`;
+}
+
+/** Verify an HMAC-SHA256 internal assertion with strict kid, audience, and <=15s TTL checks. */
+export async function verifyInternalAssertion(
+  token: string,
+  secret: string,
+  expectedKeyId: string,
+  expectedAud: string,
+  nowMs = Date.now(),
+  skewMs = 2_000
+): Promise<{ ok: true; claims: InternalAssertionClaims
