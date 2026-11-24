@@ -388,6 +388,12 @@ export class SafetyInterlock {
     const approvalId = policy.decision === "require_approval" ? "apr_" + crypto.randomUUID() : undefined;
     const now = Date.now();
     const expires = now + (policy.expires_in_ms ?? 4 * 60 * 60 * 1000);
+    const decisionLabel = policy.decision === "allow" ? "ALLOW"
+      : policy.decision === "deny" ? "DENY" : "REQUIRE_APPROVAL";
+    const attestation = await this.createDecisionAttestation({
+      tenant: identity.tenant, actor: identity.actor, decision: decisionLabel,
+      action, policy, approval_id: approvalId, phase: "policy",
+    });
     if (approvalId) {
       this.sql.exec(
         `INSERT INTO pending_approvals
@@ -396,13 +402,6 @@ export class SafetyInterlock {
         approvalId, JSON.stringify(action), JSON.stringify(identity), JSON.stringify(policy), now, expires,
       );
     }
-
-    const decisionLabel = policy.decision === "allow" ? "ALLOW"
-      : policy.decision === "deny" ? "DENY" : "REQUIRE_APPROVAL";
-    const attestation = await this.createDecisionAttestation({
-      tenant: identity.tenant, actor: identity.actor, decision: decisionLabel,
-      action, policy, approval_id: approvalId, phase: "policy",
-    });
 
     this.sql.exec(
       `INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail)
