@@ -20,7 +20,7 @@
     "check-ai-guardrail": "node scripts/check-ai-guardrail.mjs",
     "test:attestation": "node --experimental-loader ./tests/ts-loader.mjs --test tests/attestation.test.mts",
     "test:trust-fabric": "node --experimental-loader ./tests/ts-loader.mjs --test tests/trust-fabric.test.mts",
-    "test:control-assurance": "node --experimental-loader ./tests/ts-loader.mjs --test tests/control-assurance/replay.test.mts tests/control-assurance/fail-closed.test.mts"
+    "test:control-assurance": "node --experimental-loader ./tests/ts-loader.mjs --test tests/control-assurance/replay.test.mts tests/control-assurance/fail-closed.test.mts tests/safety-interlock-direct.test.mts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261106.1",
