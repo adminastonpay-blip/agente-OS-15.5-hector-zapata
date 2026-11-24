@@ -66,6 +66,8 @@ function makeEnv() {
     SAFETY: safetyNamespace,
     REPLAY_GUARD: replayNamespace,
     CHAT_MODEL: "@cf/meta/llama-3.1-8b-instruct",
+    INTERNAL_ASSERTION_SECRET: "unit-test-secret-1234567890",
+    INTERNAL_ASSERTION_KEY_ID: "test-recovery-e2e",
   } as any;
   return { env, calls };
 }
