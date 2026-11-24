@@ -1,6 +1,7 @@
 const STAGING_ALLOWED_PATHS = new Set([
   "/",
   "/health",
+  "/v1/engineering/health",
   "/v1/audit-target",
   "/v1/audit/anchor/verify",
   "/v1/etl/ingest",
