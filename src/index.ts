@@ -54,6 +54,7 @@ type GateWorkerEnv = Env & {
   INTERNAL_ASSERTION_KEY_ID?: string;
 };
 
+/** Explicit allow-list of paths that may be served without PoP. */
 const PUBLIC_OR_READ_PATHS = new Set([
   "/",
   "/health",
@@ -108,6 +109,16 @@ function resolveRequestIdentity(req: Request, env: Env): Identity {
   };
 }
 
+/**
+ * Proof-of-Possession gate (fail-closed).
+ *
+ * Rules:
+ * - Paths in PUBLIC_OR_READ_PATHS may omit PoP (health, capabilities, etc.).
+ * - Any other path with a non-public identity MUST present a complete,
+ *   valid Ed25519 PoP (signature + public key).
+ * - Incomplete headers are always rejected.
+ * - Tenant/actor header mismatches are always rejected.
+ */
 async function verifyWorkerPopIfPresent(
   req: Request,
   identity: Identity,
@@ -118,6 +129,7 @@ async function verifyWorkerPopIfPresent(
   const claimedTenant = req.headers.get("x-aston-tenant")?.trim();
   const claimedActor = req.headers.get("x-aston-actor")?.trim();
 
+  // Header consistency checks always apply when present.
   if (claimedTenant && identity.tenant && claimedTenant !== identity.tenant) {
     return { ok: false, status: 403, error: "tenant_header_mismatch" };
   }
@@ -125,42 +137,58 @@ async function verifyWorkerPopIfPresent(
     return { ok: false, status: 403, error: "actor_header_mismatch" };
   }
 
-  const isMutatingOrProtected =
-    !PUBLIC_OR_READ_PATHS.has(path) &&
-    (req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE");
+  const isPublicPath = PUBLIC_OR_READ_PATHS.has(path);
+  const hasAnyPopHeader = Boolean(sig || pubB64Url);
+  const hasCompletePop = Boolean(sig && pubB64Url);
 
-  if (!sig && !pubB64Url) {
-    if (isMutatingOrProtected && identity.method !== "public") {
-      return { ok: false, status: 401, error: "pop_signature_required" };
-    }
-    return { ok: true };
-  }
-  if (!sig || !pubB64Url) {
+  // Incomplete PoP headers are never accepted.
+  if (hasAnyPopHeader && !hasCompletePop) {
     return { ok: false, status: 401, error: "incomplete_pop_headers" };
   }
-  if (identity.method === "public" || !identity.tenant || !identity.actor) {
-    return { ok: false, status: 403, error: "verified_identity_required_for_pop" };
+
+  // Public allow-list paths may omit PoP entirely.
+  if (isPublicPath && !hasAnyPopHeader) {
+    return { ok: true };
   }
 
-  try {
-    const pubKey = await importEd25519PublicKey(fromBase64Url(pubB64Url));
-    const rawBody =
-      req.method === "GET" || req.method === "HEAD" ? "" : await req.clone().text().catch(() => "");
-    const statement = canonicalizeJson({
-      method: req.method,
-      path,
-      tenant: identity.tenant,
-      actor: identity.actor,
-      body: rawBody,
-    });
-    const valid = await verifyEd25519ProofOfPossession(pubKey, statement, sig);
-    if (!valid) {
-      return { ok: false, status: 401, error: "invalid_ed25519_pop_signature" };
+  // Non-public identity on a protected path requires complete PoP.
+  if (!isPublicPath && identity.method !== "public") {
+    if (!hasCompletePop) {
+      return { ok: false, status: 401, error: "pop_signature_required" };
     }
-    return { ok: true };
-  } catch {
-    return { ok: false, status: 401, error: "malformed_ed25519_pop" };
   }
+
+  // If PoP is present, it must be cryptographically valid and bound to a verified identity.
+  if (hasCompletePop) {
+    if (identity.method === "public" || !identity.tenant || !identity.actor) {
+      return { ok: false, status: 403, error: "verified_identity_required_for_pop" };
+    }
+
+    try {
+      const pubKey = await importEd25519PublicKey(fromBase64Url(pubB64Url!));
+      const rawBody =
+        req.method === "GET" || req.method === "HEAD" ? "" : await req.clone().text().catch(() => "");
+      const statement = canonicalizeJson({
+        method: req.method,
+        path,
+        tenant: identity.tenant,
+        actor: identity.actor,
+        body: rawBody,
+      });
+      const valid = await verifyEd25519ProofOfPossession(pubKey, statement, sig!);
+      if (!valid) {
+        return { ok: false, status: 401, error: "invalid_ed25519_pop_signature" };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, status: 401, error: "malformed_ed25519_pop" };
+    }
+  }
+
+  // Remaining case: public identity on a non-public path without PoP.
+  // Downstream handlers already reject public identity on protected routes;
+  // we do not open the door here.
+  return { ok: true };
 }
 
 async function createWorkerInternalAssertion(
@@ -330,4 +358,3 @@ export default {
     await handleETLQueue(batch as any, env, ctx);
   },
 } satisfies ExportedHandler<GateWorkerEnv>;
-
