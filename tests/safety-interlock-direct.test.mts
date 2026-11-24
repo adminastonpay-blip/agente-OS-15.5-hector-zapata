@@ -32,6 +32,12 @@ class FakeSqlStorage {
     } else if (q.startsWith("SELECT * FROM pending_approvals WHERE id = ?")) {
       const row = this.pending.get(String(args[0]));
       rows = row ? [{ ...row }] : [];
+    } else if (q.startsWith("UPDATE pending_approvals SET status = 'processing'")) {
+      const row = this.pending.get(String(args[0]));
+      if (row && row.status === "pending") row.status = "processing";
+    } else if (q.startsWith("UPDATE pending_approvals SET status = 'pending' WHERE id = ?")) {
+      const row = this.pending.get(String(args[0]));
+      if (row && row.status === "processing") row.status = "pending";
     } else if (q.startsWith("UPDATE pending_approvals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?")) {
       const [status, decided_by, decided_at, id] = args;
       const row = this.pending.get(String(id));
