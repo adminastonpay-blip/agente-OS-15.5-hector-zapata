@@ -474,7 +474,7 @@ export class SafetyInterlock {
     }
 
     const initial = this.sql.exec<Record<string, SqlStorageValue>>(
-      "SELECT *, json_extract(identity_json, '$.tenant') AS tenant_id FROM pending_approvals WHERE id = ? LIMIT 1",
+      "SELECT * FROM pending_approvals WHERE id = ? LIMIT 1",
       approvalId,
     ).toArray()[0];
     if (!initial) return { error: "approval not found", status: 404 };
