@@ -12,7 +12,7 @@ class FakeSqlStorage {
   columns = new Set(["id","action_json","identity_json","policy_json","created_at","expires_at","status","decided_by","decided_at"]);
 
   exec<T extends Record<string, any>>(query: string, ...args: any[]) {
-    const q = query.replace(/\\s+/g, " ").trim();
+    const q = query.replace(/\s+/g, " ").trim();
     let rows: Row[] = [];
     let rowsWritten = 0;
 
