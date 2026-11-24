@@ -255,6 +255,7 @@ export class SafetyInterlock {
 
         let boundIdentity: Identity;
         let principalBinding: { agent_id?: string; credential_id?: string } = {};
+        let assertionNonce: { jti: string; aud: string; exp: number } | undefined;
         if (assertionConfigured) {
           if (!secret || !kid) {
             return Response.json(
@@ -276,26 +277,12 @@ export class SafetyInterlock {
               { status: 401 }
             );
           }
-          try {
-            this.state.storage.transactionSync(() => {
-              consumeNonceSync(
-                this.sql,
-                "internal_assertion_nonces",
-                verified.claims.jti,
-                verified.claims.aud,
-                verified.claims.exp,
-                Date.now()
-              );
-            });
-          } catch (err) {
-            if (err instanceof ControlAssuranceError) {
-              return Response.json({ error: err.message, code: err.code }, { status: err.statusCode });
-            }
-            return Response.json(
-              { error: "nonce_consume_failed", code: "NONCE_CONSUME_FAILED" },
-              { status: 503 }
-            );
-          }
+          // The nonce is consumed only after the tenant Trust Fabric probe succeeds.
+          assertionNonce = {
+            jti: verified.claims.jti,
+            aud: verified.claims.aud,
+            exp: verified.claims.exp,
+          };
           boundIdentity = {
             actor: verified.claims.sub_actor,
             tenant: verified.claims.sub_tenant,
@@ -330,7 +317,7 @@ export class SafetyInterlock {
           boundIdentity = candidate;
         }
 
-        const result = await this.evaluateAndGate(body.action, boundIdentity, principalBinding);
+        const result = await this.evaluateAndGate(body.action, boundIdentity, principalBinding, assertionNonce);
         return Response.json(result);
       }
 
@@ -429,7 +416,8 @@ export class SafetyInterlock {
   private async evaluateAndGate(
     action: ProposedAction,
     identity: Identity,
-    principalBinding: { agent_id?: string; credential_id?: string } = {}
+    principalBinding: { agent_id?: string; credential_id?: string } = {},
+    assertionNonce?: { jti: string; aud: string; exp: number }
   ): Promise<{
     status: "allowed" | "denied" | "pending_approval";
     policy?: PolicyResult;
@@ -468,6 +456,24 @@ export class SafetyInterlock {
       }
     } catch {
       throw new ControlAssuranceError(503, "TRUST_AUTHORIZATION_UNAVAILABLE", "Trust Fabric authorization failed; evaluation is closed.");
+    }
+
+    if (assertionNonce) {
+      try {
+        this.state.storage.transactionSync(() => {
+          consumeNonceSync(
+            this.sql,
+            "internal_assertion_nonces",
+            assertionNonce.jti,
+            assertionNonce.aud,
+            assertionNonce.exp,
+            Date.now()
+          );
+        });
+      } catch (err) {
+        if (err instanceof ControlAssuranceError) throw err;
+        throw new ControlAssuranceError(503, "NONCE_CONSUME_FAILED", "Internal assertion nonce could not be consumed atomically.");
+      }
     }
 
     const effectiveIdentity: Identity = {
