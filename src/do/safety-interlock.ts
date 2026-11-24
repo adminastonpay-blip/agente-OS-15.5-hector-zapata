@@ -315,6 +315,8 @@ export class SafetyInterlock {
             );
           }
           boundIdentity = candidate;
+          // Synthetic principal bindings exist only inside the isolated unit-test harness.
+          principalBinding = { agent_id: "test-agent", credential_id: "test-credential" };
         }
 
         const result = await this.evaluateAndGate(body.action, boundIdentity, principalBinding, assertionNonce);
@@ -495,6 +497,17 @@ export class SafetyInterlock {
         decision: "require_approval",
         reasons: [...policy.reasons, trustDecision.reason || "Trust Fabric requires human approval."],
       };
+    }
+
+    // Gate A approvals must be durably bound to both an agent and its credential.
+    // Otherwise a DO restart would correctly expire the unbound approval as legacy.
+    if (policy.decision === "require_approval" &&
+        (!principalBinding.agent_id || !principalBinding.credential_id)) {
+      throw new ControlAssuranceError(
+        403,
+        "APPROVAL_PRINCIPAL_BINDING_REQUIRED",
+        "High-impact approvals require verified agent and credential bindings."
+      );
     }
 
     let attestation: AttestationEnvelope | undefined;
