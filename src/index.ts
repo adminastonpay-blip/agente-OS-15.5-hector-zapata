@@ -29,6 +29,7 @@ import { handleDefense } from "./routes/defense";
 import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleEngineering } from "./routes/engineering";
+import { handleEngineeringCisoLeads, handleEngineeringHealth, handleShopifyPublic } from "./routes/shopify-public";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
@@ -495,6 +496,15 @@ export default {
         version: VERSION,
       }, 503);
     }
+
+    const shopifyPublic = await handleShopifyPublic(path, req, env);
+    if (shopifyPublic) return shopifyPublic;
+
+    const engineeringLeads = await handleEngineeringCisoLeads(path, req, env, identity);
+    if (engineeringLeads) return engineeringLeads;
+
+    const engineeringHealth = await handleEngineeringHealth(path, req, env, identity);
+    if (engineeringHealth) return engineeringHealth;
 
     const engineering = await handleEngineering(path, req, env, identity, json);
     if (engineering) return engineering;
