@@ -21,7 +21,7 @@ interface ApprovalDbRow extends Record<string, SqlStorageValue> {
   created_at: number; expires_at: number; status: string; decided_by: string | null;
   decided_at: number | null; lease_id: string | null; lease_expires_at: number | null;
   processing_attempt: number; fencing_token: number;
-  agent_id?: string | null; credential_id?: string | null;
+  agent_id: string | null; credential_id: string | null;
 }
 interface AuditDbRow extends Record<string, SqlStorageValue> { event_hash: string; }
 
