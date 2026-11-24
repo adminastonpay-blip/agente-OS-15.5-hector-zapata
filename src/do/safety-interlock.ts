@@ -15,6 +15,7 @@ import { evaluatePolicy, type ProposedAction, type PolicyResult } from "../safet
 import { emitLineage } from "../lineage";
 import { hashAuditRecord, verifyAuditChain } from "../security/audit-chain";
 import { sha256Hex, writeImmutableCheckpoint, verifyExternalOtsAnchor } from "../security/audit-anchor";
+import { importEd25519PrivateKey, importEd25519PublicKey, signAttestation, verifyAttestation, type AttestationEnvelope } from "../core/attestation";
 
 export class SafetyInterlock {
   private state: DurableObjectState;
@@ -62,6 +63,10 @@ export class SafetyInterlock {
     `);
     this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
     this.sql.exec(`CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events_are_immutable'); END`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS decision_attestations (
+      attestation_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, actor TEXT NOT NULL,
+      decision TEXT NOT NULL, envelope_json TEXT NOT NULL, created_at INTEGER NOT NULL
+    )`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS audit_anchor_state (tenant TEXT PRIMARY KEY, anchored_count INTEGER NOT NULL, root_hash TEXT NOT NULL, object_key TEXT NOT NULL, anchored_at INTEGER NOT NULL)`);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS audit_claims (
@@ -202,8 +207,12 @@ export class SafetyInterlock {
 
     if (u.pathname === "/evaluate" && req.method === "POST") {
       const body = await req.json<{ action: ProposedAction; identity: Identity }>();
-      const decision = await this.evaluateAndGate(body.action, body.identity);
-      return Response.json({ contract_version: "1", ...decision });
+      try {
+        const decision = await this.evaluateAndGate(body.action, body.identity);
+        return Response.json({ contract_version: "1", ...decision });
+      } catch {
+        return Response.json({ ok: false, error: "decision_attestation_unavailable" }, { status: 503 });
+      }
     }
 
     if (u.pathname === "/pending" && req.method === "GET") {
@@ -230,7 +239,11 @@ export class SafetyInterlock {
         approved: boolean;
         operator: string;
       }>();
-      return Response.json(await this.decide(approval_id, approved, operator));
+      try {
+        return Response.json(await this.decide(approval_id, approved, operator));
+      } catch {
+        return Response.json({ ok: false, error: "decision_attestation_unavailable" }, { status: 503 });
+      }
     }
 
     if (u.pathname === "/sandbox/exec" && req.method === "POST") {
@@ -307,131 +320,165 @@ export class SafetyInterlock {
     for (const row of tenants) await this.maybeAnchorTenant(row.tenant, true);
     await this.state.storage.setAlarm(Date.now() + 3600000);
   }
+  private async authorizeTrustFabric(action: ProposedAction, identity: Identity): Promise<{ effect: "allow" | "deny" | "require_approval"; reason: string }> {
+    if (!this.env.TRUST) throw new Error("trust_fabric_binding_missing");
+    const stub = this.env.TRUST.get(this.env.TRUST.idFromName("tenant:" + identity.tenant));
+    const response = await stub.fetch("https://trust.internal/authorize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenant: identity.tenant, actor: identity.actor, roles: identity.roles,
+        clearance: identity.clearance, tool: action.tool,
+      }),
+    });
+    if (!response.ok) throw new Error("trust_fabric_unavailable");
+    const result = await response.json<{ effect?: string; reason?: string }>();
+    if (!["allow", "deny", "require_approval"].includes(result.effect ?? "")) {
+      throw new Error("trust_fabric_invalid_response");
+    }
+    return { effect: result.effect as "allow" | "deny" | "require_approval", reason: result.reason ?? "trust_policy" };
+  }
+
+  private decodeBase64Url(value: string): Uint8Array {
+    if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new TypeError("invalid_attestation_key_encoding");
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  }
+
+  private async createDecisionAttestation(input: {
+    tenant: string; actor: string; decision: string; action: ProposedAction;
+    policy: PolicyResult; approval_id?: string; phase: "policy" | "human_approval";
+  }): Promise<AttestationEnvelope> {
+    const privateEncoded = this.env.ATTESTATION_PRIVATE_KEY;
+    const publicEncoded = this.env.ATTESTATION_PUBLIC_KEY;
+    const keyId = this.env.ATTESTATION_KEY_ID;
+    if (!privateEncoded || !publicEncoded || !keyId) throw new Error("attestation_keys_not_configured");
+    const privateKey = await importEd25519PrivateKey(this.decodeBase64Url(privateEncoded));
+    const publicKey = await importEd25519PublicKey(this.decodeBase64Url(publicEncoded));
+    const envelope = await signAttestation({
+      schema: "aston.safety.decision.v1",
+      tenant: input.tenant,
+      actor: input.actor,
+      phase: input.phase,
+      decision: input.decision,
+      action: input.action,
+      policy: input.policy,
+      approval_id: input.approval_id ?? null,
+    }, privateKey, keyId, "att_" + crypto.randomUUID());
+    if (!(await verifyAttestation(envelope, publicKey))) throw new Error("attestation_self_verification_failed");
+    this.sql.exec(
+      "INSERT INTO decision_attestations (attestation_id, tenant, actor, decision, envelope_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      envelope.attestation_id, input.tenant, input.actor, input.decision, JSON.stringify(envelope), Date.now(),
+    );
+    return envelope;
+  }
+
   private async evaluateAndGate(action: ProposedAction, identity: Identity) {
-    const policy = evaluatePolicy(action, identity);
+    if (!action || typeof action.tool !== "string" || !identity?.tenant || !identity.actor) {
+      throw new Error("invalid_safety_decision_input");
+    }
+    const trust = await this.authorizeTrustFabric(action, identity);
+    const policy: PolicyResult = trust.effect === "deny"
+      ? { decision: "deny", risk: "low", score: 0, reasons: [trust.reason] }
+      : trust.effect === "require_approval"
+        ? { decision: "require_approval", risk: "high", score: 75, reasons: [trust.reason] }
+        : evaluatePolicy(action, identity);
+
+    const approvalId = policy.decision === "require_approval" ? "apr_" + crypto.randomUUID() : undefined;
+    const now = Date.now();
+    const expires = now + (policy.expires_in_ms ?? 4 * 60 * 60 * 1000);
+    if (approvalId) {
+      this.sql.exec(
+        `INSERT INTO pending_approvals
+         (id, action_json, identity_json, policy_json, created_at, expires_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+        approvalId, JSON.stringify(action), JSON.stringify(identity), JSON.stringify(policy), now, expires,
+      );
+    }
+
+    const decisionLabel = policy.decision === "allow" ? "ALLOW"
+      : policy.decision === "deny" ? "DENY" : "REQUIRE_APPROVAL";
+    const attestation = await this.createDecisionAttestation({
+      tenant: identity.tenant, actor: identity.actor, decision: decisionLabel,
+      action, policy, approval_id: approvalId, phase: "policy",
+    });
 
     this.sql.exec(
       `INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      Date.now(),
-      action.tool,
-      policy.decision,
-      policy.risk,
-      policy.score,
-      identity.actor,
-      JSON.stringify(policy.reasons)
+      now, action.tool, policy.decision, policy.risk, policy.score, identity.actor,
+      JSON.stringify({ reasons: policy.reasons, attestation_id: attestation.attestation_id }),
     );
-
     await this.appendAuditEvent(identity.tenant, identity.actor, "agent.policy_decision", {
-      tool: action.tool, decision: policy.decision, risk: policy.risk,
-      score: policy.score, reasons: policy.reasons,
+      tool: action.tool, decision: policy.decision, risk: policy.risk, score: policy.score,
+      reasons: policy.reasons, attestation_id: attestation.attestation_id,
+      payload_digest: attestation.payload_digest.value,
     });
-
     await emitLineage(this.env, {
-      tenant: identity.tenant,
-      object_id: `safety_${crypto.randomUUID()}`,
-      transformation: `safety.${policy.decision}`,
-      pipeline_version: "v15.5",
-      actor: identity.actor,
-      metadata: {
-        tool: action.tool,
-        risk: policy.risk,
-        score: policy.score,
-        reasons: policy.reasons,
+      tenant: identity.tenant, object_id: attestation.attestation_id,
+      transformation: `safety.${policy.decision}`, pipeline_version: "v15.5",
+      actor: identity.actor, metadata: {
+        tool: action.tool, risk: policy.risk, score: policy.score,
+        reasons: policy.reasons, attestation_id: attestation.attestation_id,
       },
     });
 
     if (policy.decision === "allow") {
-      return {
-        status: "allowed",
-        policy,
-        message: "Acción permitida por política de seguridad",
-      };
+      return { status: "allowed", policy, attestation, message: "Acción permitida por política de seguridad" };
     }
-
     if (policy.decision === "deny") {
-      return {
-        status: "denied",
-        policy,
-        message: "Acción denegada por política de seguridad",
-      };
+      return { status: "denied", policy, attestation, message: "Acción denegada por política de seguridad" };
     }
-
-    const id = `apr_${crypto.randomUUID()}`;
-    const now = Date.now();
-    const expires = now + (policy.expires_in_ms ?? 4 * 60 * 60 * 1000);
-
-    this.sql.exec(
-      `INSERT INTO pending_approvals
-       (id, action_json, identity_json, policy_json, created_at, expires_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-      id,
-      JSON.stringify(action),
-      JSON.stringify(identity),
-      JSON.stringify(policy),
-      now,
-      expires
-    );
-
     return {
-      status: "pending_approval",
-      approval_id: id,
-      policy,
-      expires_at: expires,
-      message: "Acción requiere aprobación humana. Use POST /decide",
+      status: "pending_approval", approval_id: approvalId, policy, attestation,
+      expires_at: expires, message: "Acción requiere aprobación humana. Use POST /decide",
     };
   }
 
   private async decide(approvalId: string, approved: boolean, operator: string) {
-    const row = this.sql
-      .exec(`SELECT * FROM pending_approvals WHERE id = ?`, approvalId)
-      .toArray()[0] as any;
-
+    const row = this.sql.exec("SELECT * FROM pending_approvals WHERE id = ?", approvalId).toArray()[0] as any;
     if (!row) return { error: "approval not found", status: 404 };
     if (row.status !== "pending") return { error: `already ${row.status}`, status: 409 };
     if (Date.now() > row.expires_at) {
-      this.sql.exec(`UPDATE pending_approvals SET status = 'expired' WHERE id = ?`, approvalId);
+      this.sql.exec("UPDATE pending_approvals SET status = 'expired' WHERE id = ?", approvalId);
       return { error: "approval expired", status: 410 };
     }
+    if (typeof operator !== "string" || !operator.trim() || operator.length > 128) {
+      return { error: "invalid_operator", status: 400 };
+    }
 
+    const originalIdentity = JSON.parse(row.identity_json) as Identity;
+    const action = JSON.parse(row.action_json) as ProposedAction;
+    const policy = JSON.parse(row.policy_json) as PolicyResult;
     const newStatus = approved ? "approved" : "rejected";
-    this.sql.exec(
-      `UPDATE pending_approvals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?`,
-      newStatus, operator, Date.now(), approvalId
-    );
+    const attestation = await this.createDecisionAttestation({
+      tenant: originalIdentity.tenant, actor: operator,
+      decision: approved ? "ALLOW" : "DENY", action, policy,
+      approval_id: approvalId, phase: "human_approval",
+    });
 
+    this.sql.exec(
+      "UPDATE pending_approvals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?",
+      newStatus, operator, Date.now(), approvalId,
+    );
     this.sql.exec(
       `INSERT INTO execution_log (ts, action_tool, decision, risk, score, actor, detail)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      Date.now(),
-      JSON.parse(row.action_json).tool,
-      newStatus,
-      JSON.parse(row.policy_json).risk,
-      JSON.parse(row.policy_json).score,
-      operator,
-      `Human decision by ${operator}`
+      Date.now(), action.tool, newStatus, policy.risk, policy.score, operator,
+      JSON.stringify({ attestation_id: attestation.attestation_id }),
     );
-
-    const originalIdentity = JSON.parse(row.identity_json) as Identity;
     await this.appendAuditEvent(originalIdentity.tenant, operator, "approval.decision", {
       approval_id: approvalId, decision: newStatus, original_actor: originalIdentity.actor,
+      attestation_id: attestation.attestation_id, payload_digest: attestation.payload_digest.value,
     });
-
     await emitLineage(this.env, {
-      tenant: originalIdentity.tenant,
-      object_id: approvalId,
-      transformation: `safety.human_${newStatus}`,
-      pipeline_version: "v15.5",
-      actor: operator,
-      metadata: { original_actor: JSON.parse(row.identity_json).actor },
+      tenant: originalIdentity.tenant, object_id: attestation.attestation_id,
+      transformation: `safety.human_${newStatus}`, pipeline_version: "v15.5",
+      actor: operator, metadata: { original_actor: originalIdentity.actor, approval_id: approvalId,
+        attestation_id: attestation.attestation_id },
     });
-
-    return {
-      status: newStatus,
-      approval_id: approvalId,
-      action: JSON.parse(row.action_json),
-      decided_by: operator,
-    };
+    return { status: newStatus, approval_id: approvalId, action, decided_by: operator, attestation };
   }
 
   private async sandboxExec(opts: {
