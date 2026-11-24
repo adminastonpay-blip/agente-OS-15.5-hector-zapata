@@ -284,8 +284,8 @@ export default {
     }
 
     if (path === "/v1/recovery/mission" && req.method === "POST") {
-      const origin = req.headers.get("origin");
-      if (!isAllowedRecoveryOrigin(origin, env)) {
+      const origin = req.headers.get("origin") || "";
+      if (!isAllowedRecoveryOrigin(origin, env.RECOVERY_ALLOWED_ORIGINS)) {
         return jsonResponse({ ok: false, error: "recovery_origin_not_allowed" }, 403);
       }
       const missionTokenPublicKey = env.MISSION_TOKEN_PUBLIC_KEY;
