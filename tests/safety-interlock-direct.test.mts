@@ -135,7 +135,7 @@ test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense m
     body: JSON.stringify({ approval_id: gate.approval_id, approved: true, identity: { ...identity, actor: operator, roles: ["approver"] } }),
   }));
   const replay = await replayResponse.json<any>();
-  assert.equal(replay.error, "already approved");
+  assert.equal(replay.code, "APPROVAL_ALREADY_CONSUMED");
   assert.equal(replay.status, 409);
 
   const logResponse = await interlock.fetch(new Request("https://safety.internal/log?limit=10"));
@@ -146,7 +146,7 @@ test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense m
   const auditResponse = await interlock.fetch(new Request("https://safety.internal/audit/verify?tenant=tenant-alpha"));
   const audit = await auditResponse.json<any>();
   assert.equal(audit.intact, true);
-  assert.equal(audit.events, 2);
+  assert.equal(audit.events, 3);
 });
 
 test("AST-013C-DO-002 / actual SafetyInterlock class denies critical action without secret clearance", async () => {
