@@ -95,7 +95,11 @@ test("6. un jti verificado se consume una sola vez", async () => {
       },
     }),
   };
-  const gate = new ControlGate({ REPLAY_GUARD: namespace } as any);
+  const gate = new ControlGate({
+    REPLAY_GUARD: namespace,
+    INTERNAL_ASSERTION_SECRET: "unit-test-secret-1234567890",
+    INTERNAL_ASSERTION_KEY_ID: "test-mission-token",
+  } as any);
   const payload = await f.verifier.verify(f.token);
   assert.deepEqual(await gate.consumeMissionToken(payload), { ok: true });
   assert.deepEqual(await gate.consumeMissionToken(payload), {
