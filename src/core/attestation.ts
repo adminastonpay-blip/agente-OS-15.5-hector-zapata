@@ -164,7 +164,9 @@ export async function verifyAttestation(
       !envelope ||
       envelope.schema_version !== "1.0.0" ||
       envelope.algorithm !== "Ed25519" ||
-      !envelope.key_id ||
+      !envelope.attestation_id || envelope.attestation_id.length > 256 ||
+      !envelope.key_id || envelope.key_id.length > 1024 ||
+      envelope.transparency?.anchor_status !== "not_submitted" ||
       envelope.payload_digest?.algorithm !== "sha-256" ||
       !/^[a-f0-9]{64}$/.test(envelope.payload_digest.value) ||
       !Number.isFinite(Date.parse(envelope.signed_at))
