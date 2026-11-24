@@ -130,7 +130,7 @@ test("7. Durable Object rejects concurrent duplicate jti claims", async () => {
       return { toArray: () => [] };
     },
   };
-  const guard = new ReplayGuard({ storage: { sql } } as any);
+  const guard = new ReplayGuard({ storage: { sql, transactionSync: (fn: () => unknown) => fn() } } as any);
   const now = Math.floor(Date.now() / 1000);
   const request = () => guard.fetch(new Request("https://replay.internal/consume", {
     method: "POST",
@@ -146,7 +146,7 @@ test("7. Durable Object rejects concurrent duplicate jti claims", async () => {
 
 test("8. Durable Object rejects expired or overlong replay claims", async () => {
   const sql = { exec: () => ({ toArray: () => [{ inserted: 0 }] }) };
-  const guard = new ReplayGuard({ storage: { sql } } as any);
+  const guard = new ReplayGuard({ storage: { sql, transactionSync: (fn: () => unknown) => fn() } } as any);
   const response = await guard.fetch(new Request("https://replay.internal/consume", {
     method: "POST",
     headers: { "content-type": "application/json" },
