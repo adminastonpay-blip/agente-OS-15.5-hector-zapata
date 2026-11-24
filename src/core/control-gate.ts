@@ -39,13 +39,19 @@ export function consumeInferencePermit(
   nowMs = Date.now()
 ): boolean {
   if (!permit || typeof permit !== "object") return false;
-  const record = issuedPermits.get(permit as unknown as object);
-  issuedPermits.delete(permit as unknown as object);
+  const key = permit as unknown as object;
+  const record = issuedPermits.get(key);
   if (!record) return false;
+  if (record.expiresAt <= nowMs) {
+    issuedPermits.delete(key);
+    return false;
+  }
+  // A mismatched attempt is rejected but does not burn the valid capability.
+  // Only an exact action/payload/model match consumes the one-use permit.
   if (record.action !== expectedAction) return false;
-  if (record.expiresAt <= nowMs) return false;
   if (typeof expectedPayload === "string" && record.payload !== expectedPayload) return false;
   if (typeof expectedModel === "string" && record.model !== expectedModel) return false;
+  issuedPermits.delete(key);
   return true;
 }
 
