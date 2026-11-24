@@ -9,23 +9,20 @@ const agent = await readFile(new URL("../src/do/agent-node.ts", import.meta.url)
 const simulation = await readFile(new URL("../src/do/simulation.ts", import.meta.url), "utf8");
 
 test("chat route uses the Control Gate and one-use Model Runner permit", () => {
-  const start = source.indexOf("async function handleChat(");
-  const end = source.indexOf("async function handleChatStream(", start);
-  assert.ok(start >= 0 && end > start, "chat handler must exist");
+  const start = source.indexOf('if (path === "/v1/chat" && req.method === "POST")');
+  const end = source.indexOf('if (path.startsWith("/v21/")', start);
+  assert.ok(start >= 0 && end > start, "inline chat route must exist");
   const handler = source.slice(start, end);
-  assert.match(handler, /new ControlGate\(env\)\.authorizeChat\(identity, messages\)/);
-  assert.match(handler, /new ModelRunner\(env\)\.runChat\(authorization\.permit, messages/);
-  assert.match(handler, /if \(!authorization\.ok\)/);
-  assert.doesNotMatch(handler, /\bchat\(env,\s*messages/);
+  assert.match(handler, /new ControlGate\\(env\\)\\.authorizeChat\\(identity, messages\\)/);
+  assert.match(handler, /runner\\.runChat\\(decision\\.permit, messages/);
+  assert.match(handler, /if \\(!decision\\.ok\\)/);
+  assert.match(handler, /isOutputSafeForCredentialLeak\\(answer\\)/);
 });
 
-test("streaming remains fail-closed until buffered output inspection exists", () => {
-  const start = source.indexOf("async function handleChatStream(");
-  const end = source.indexOf("async function handleTts(", start);
-  assert.ok(start >= 0 && end > start, "chat stream handler must exist");
-  const handler = source.slice(start, end);
-  assert.match(handler, /chat_stream_disabled_until_buffered_safety_guard_is_implemented/);
-  assert.doesNotMatch(handler, /chatStream\(/);
+test("streaming has no unguarded execution route", () => {
+  assert.doesNotMatch(source, /path === ["']\\/v1\\/chat\\/stream["']/);
+  assert.doesNotMatch(source, /\\bchatStream\\s*\\(/);
+  assert.match(source, /error: "not_found", path \\}, 404/);
 });
 
 test("decision inference is gated and Supervisor fails closed without the interlock", () => {
