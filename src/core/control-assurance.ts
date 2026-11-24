@@ -6,7 +6,7 @@ import { importEd25519PrivateKey, importEd25519PublicKey, signAttestation, verif
 import { hashAuditRecord } from "../security/audit-chain";
 
 export type ApprovalDecision = "approved" | "rejected";
-export type ApprovalStatus = "pending" | "processing" | "approved" | "rejected" | "expired";
+export type ApprovalStatus = "pending" | "processing" | "approved" | "rejected" | "expired" | "EXPIRED_LEGACY_UNBOUND";
 
 export interface PendingApproval {
   id: string; tenant_id: string; action_json: string; identity_json: string; policy_json: string;
@@ -14,12 +14,14 @@ export interface PendingApproval {
   decided_by?: string | null; decided_at?: number | null;
   lease_id?: string | null; lease_expires_at?: number | null;
   processing_attempt: number; fencing_token: number;
+  agent_id?: string | null; credential_id?: string | null;
 }
 interface ApprovalDbRow extends Record<string, SqlStorageValue> {
   id: string; tenant_id: string; action_json: string; identity_json: string; policy_json: string;
   created_at: number; expires_at: number; status: string; decided_by: string | null;
   decided_at: number | null; lease_id: string | null; lease_expires_at: number | null;
   processing_attempt: number; fencing_token: number;
+  agent_id?: string | null; credential_id?: string | null;
 }
 interface AuditDbRow extends Record<string, SqlStorageValue> { event_hash: string; }
 
@@ -40,10 +42,91 @@ function decodeBase64Url(value: string): Uint8Array {
   const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
+function hasSqlTable(sql: SqlStorage, tableName: string): boolean {
+  const row = sql.exec<{ cnt: number }>(
+    "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = ?",
+    tableName
+  ).toArray()[0];
+  return Number(row?.cnt ?? 0) > 0;
+}
+function assertActivePrincipalStateSync(sql: SqlStorage, approval: PendingApproval, nowMs: number): void {
+  if (hasSqlTable(sql, "tenants")) {
+    const tenantRow = sql.exec<{ status: string }>(
+      "SELECT status FROM tenants WHERE tenant_id = ? LIMIT 1",
+      approval.tenant_id
+    ).toArray()[0];
+    if (tenantRow && String(tenantRow.status).toLowerCase() !== "active") {
+      throw new ControlAssuranceError(403, "TENANT_INACTIVE_OR_REVOKED", "Tenant is not active.");
+    }
+  }
+  const agentId = approval.agent_id ?? null;
+  const credentialId = approval.credential_id ?? null;
+  if (agentId && hasSqlTable(sql, "agents")) {
+    const agentRow = sql.exec<{ status: string }>(
+      "SELECT status FROM agents WHERE tenant_id = ? AND agent_id = ? LIMIT 1",
+      approval.tenant_id, agentId
+    ).toArray()[0];
+    if (agentRow && String(agentRow.status).toLowerCase() !== "active") {
+      throw new ControlAssuranceError(403, "AGENT_REVOKED_OR_QUARANTINED", "Agent is revoked or quarantined.");
+    }
+  }
+  if (credentialId && hasSqlTable(sql, "agent_credentials")) {
+    const credRow = sql.exec<{ status: string; expires_at: number | null; tenant_id: string; agent_id: string | null }>(
+      "SELECT status, expires_at, tenant_id, agent_id FROM agent_credentials WHERE credential_id = ? LIMIT 1",
+      credentialId
+    ).toArray()[0];
+    if (!credRow) {
+      throw new ControlAssuranceError(403, "CREDENTIAL_NOT_FOUND", "Agent credential does not exist.");
+    }
+    if (credRow.tenant_id !== approval.tenant_id || (agentId && credRow.agent_id && credRow.agent_id !== agentId)) {
+      throw new ControlAssuranceError(403, "CREDENTIAL_BINDING_MISMATCH", "Credential binding mismatch.");
+    }
+    if (String(credRow.status).toLowerCase() !== "active") {
+      throw new ControlAssuranceError(403, "CREDENTIAL_REVOKED", "Agent credential is not active.");
+    }
+    if (credRow.expires_at !== null && credRow.expires_at !== undefined && Number(credRow.expires_at) <= nowMs) {
+      throw new ControlAssuranceError(403, "CREDENTIAL_EXPIRED", "Agent credential has expired.");
+    }
+  }
+}
+export function consumeNonceSync(
+  sql: SqlStorage,
+  table: "admin_command_nonces" | "internal_assertion_nonces",
+  key: string,
+  scopeOrAud: string,
+  expiresAt: number,
+  nowMs: number
+): void {
+  if (!key || !scopeOrAud || !Number.isFinite(expiresAt) || expiresAt <= nowMs) {
+    throw new ControlAssuranceError(403, "NONCE_INVALID_OR_EXPIRED", "Nonce is missing, invalid, or expired.");
+  }
+  if (!hasSqlTable(sql, table)) {
+    throw new ControlAssuranceError(503, "NONCE_STORE_MISSING", "Atomic nonce store is unavailable.");
+  }
+  if (table === "admin_command_nonces") {
+    sql.exec("DELETE FROM admin_command_nonces WHERE expires_at <= ?", nowMs);
+    const res = sql.exec(
+      "INSERT OR IGNORE INTO admin_command_nonces (nonce_key, scope, expires_at, consumed_at) VALUES (?, ?, ?, ?)",
+      key, scopeOrAud, expiresAt, nowMs
+    );
+    if (Number(res.rowsWritten ?? 0) !== 1) {
+      throw new ControlAssuranceError(409, "ADMIN_COMMAND_REPLAY", "Admin command nonce already consumed.");
+    }
+    return;
+  }
+  sql.exec("DELETE FROM internal_assertion_nonces WHERE expires_at <= ?", nowMs);
+  const res = sql.exec(
+    "INSERT OR IGNORE INTO internal_assertion_nonces (jti, aud, expires_at, consumed_at) VALUES (?, ?, ?, ?)",
+    key, scopeOrAud, expiresAt, nowMs
+  );
+  if (Number(res.rowsWritten ?? 0) !== 1) {
+    throw new ControlAssuranceError(409, "ASSERTION_REPLAY", "Internal assertion nonce already consumed.");
+  }
+}
 function mapApproval(row: ApprovalDbRow): PendingApproval {
   if (!row || typeof row.id !== "string" || typeof row.tenant_id !== "string" ||
       typeof row.identity_json !== "string" || typeof row.expires_at !== "number" ||
-      !["pending", "processing", "approved", "rejected", "expired"].includes(row.status)) {
+      !["pending", "processing", "approved", "rejected", "expired", "EXPIRED_LEGACY_UNBOUND"].includes(row.status)) {
     throw new ControlAssuranceError(503, "APPROVAL_ROW_INVALID", "Stored approval row is malformed.");
   }
   return {
@@ -53,6 +136,7 @@ function mapApproval(row: ApprovalDbRow): PendingApproval {
     status: row.status as ApprovalStatus, decided_by: row.decided_by, decided_at: row.decided_at,
     lease_id: row.lease_id, lease_expires_at: row.lease_expires_at,
     processing_attempt: Number(row.processing_attempt ?? 0), fencing_token: Number(row.fencing_token ?? 0),
+    agent_id: row.agent_id ?? null, credential_id: row.credential_id ?? null,
   };
 }
 function readApproval(sql: SqlStorage, id: string): PendingApproval | undefined {
@@ -118,6 +202,9 @@ export async function claimOrRecoverLease(p: ClaimOrRecoverLeaseParams): Promise
 
   for(let attempt=0;attempt<8;attempt++){
     const old=requireTenant(readApproval(p.sql,p.approvalId),p.tenantId);
+    if (old.status === "EXPIRED_LEGACY_UNBOUND") {
+      throw new ControlAssuranceError(410, "APPROVAL_LEGACY_UNBOUND", "Legacy unbound approval is expired.");
+    }
     const recoverable=old.status==="processing"&&old.lease_expires_at!==null&&old.lease_expires_at!==undefined&&p.nowMs>=old.lease_expires_at;
     if(old.status!=="pending"&&!recoverable){
       if(old.status==="expired"||p.nowMs>=old.expires_at) throw new ControlAssuranceError(410,"APPROVAL_EXPIRED","Approval has expired.");
@@ -137,6 +224,8 @@ export async function claimOrRecoverLease(p: ClaimOrRecoverLeaseParams): Promise
     const outcome=p.storage.transactionSync(()=>{
       const fresh=readApproval(p.sql,p.approvalId);
       if(!fresh||fresh.tenant_id!==p.tenantId) throw new ControlAssuranceError(403,"CROSS_TENANT_ACCESS_DENIED","Tenant boundary violation.");
+      if(fresh.status==="EXPIRED_LEGACY_UNBOUND") throw new ControlAssuranceError(410,"APPROVAL_LEGACY_UNBOUND","Legacy unbound approval is expired.");
+      assertActivePrincipalStateSync(p.sql, fresh, p.nowMs);
       if(currentAuditHead(p.sql,p.tenantId)!==previous) return "retry" as const;
       if(fresh.expires_at<=p.nowMs) throw new ControlAssuranceError(410,"APPROVAL_EXPIRED","Approval has expired.");
       const eligible=fresh.status==="pending"||(fresh.status==="processing"&&fresh.lease_expires_at!==null&&fresh.lease_expires_at!==undefined&&fresh.lease_expires_at<=p.nowMs);
@@ -199,6 +288,7 @@ export async function finalizeApprovalWithLease(p: FinalizeApprovalWithLeasePara
     const outcome=p.storage.transactionSync(()=>{
       const fresh=readApproval(p.sql,p.approvalId);
       if(!fresh||fresh.tenant_id!==p.tenantId) throw new ControlAssuranceError(403,"CROSS_TENANT_ACCESS_DENIED","Tenant boundary violation.");
+      assertActivePrincipalStateSync(p.sql, fresh, p.nowMs);
       if(currentAuditHead(p.sql,p.tenantId)!==previous) return "retry" as const;
       if(fresh.status!=="processing"||fresh.lease_id!==p.leaseId||fresh.fencing_token!==p.fencingToken||
          fresh.lease_expires_at===null||fresh.lease_expires_at===undefined||
