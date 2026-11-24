@@ -1,9 +1,6 @@
 /**
- * ASTON OS 21.0 route surface — fail-closed Gate A enforcement.
+ * ASTON OS 21.0 route surface — additive, fails soft when optional bindings missing.
  * Does not alter /chat contract.
- *
- * Restored after truncation that broke TypeScript ('}' expected).
- * Exports both handleV21 (path-based) and routeV21 (adapter for index.ts).
  */
 import type { Env, Identity } from "../types";
 import { createObjectType, createObject, createLink, cascadeImpact } from "../ontology";
@@ -24,6 +21,8 @@ type GateEnv = Env & {
   INTERNAL_ASSERTION_KEY_ID?: string;
 };
 
+// Vectorize namespaces are limited to 64 UTF-8 bytes. Derive only from
+// the authenticated identity; never accept a namespace from the request body.
 function tenantNamespace(identity: Identity): string | null {
   const tenant = identity.tenant?.trim();
   if (!tenant || new TextEncoder().encode(tenant).byteLength > 64) return null;
@@ -41,6 +40,10 @@ function hasVerifiedIdentity(identity: Identity | undefined | null): identity is
   );
 }
 
+/**
+ * Verifies optional Ed25519 Proof-of-Possession headers when presented.
+ * Fails closed (returns false) if headers are partially present or invalid.
+ */
 async function verifyRequestProofOfPossession(
   req: Request,
   identity: Identity,
@@ -48,27 +51,37 @@ async function verifyRequestProofOfPossession(
 ): Promise<{ ok: true } | { ok: false; status: 401 | 403; error: string }> {
   const sig = req.headers.get("x-aston-pop-signature")?.trim();
   const pubB64Url = req.headers.get("x-aston-pop-public-key")?.trim();
+  const claimedActor = req.headers.get("x-aston-actor")?.trim();
+  const claimedTenant = req.headers.get("x-aston-tenant")?.trim();
+
+  if (claimedTenant && claimedTenant !== identity.tenant) {
+    return { ok: false, status: 403, error: "tenant_header_mismatch" };
+  }
+  if (claimedActor && claimedActor !== identity.actor) {
+    return { ok: false, status: 403, error: "actor_header_mismatch" };
+  }
+
   if (!sig && !pubB64Url) {
-    return { ok: false, status: 401, error: "pop_signature_required" };
+    return { ok: true };
   }
   if (!sig || !pubB64Url) {
     return { ok: false, status: 401, error: "incomplete_pop_headers" };
   }
-  if (identity.method === "public" || !identity.tenant || !identity.actor) {
-    return { ok: false, status: 403, error: "verified_identity_required_for_pop" };
-  }
+
   try {
     const pubKey = await importEd25519PublicKey(fromBase64Url(pubB64Url));
-    const path = new URL(req.url).pathname;
-    const statement = canonicalizeJson({
+    const url = new URL(req.url);
+    const popStatement = canonicalizeJson({
       method: req.method,
-      path,
+      path: url.pathname,
       tenant: identity.tenant,
       actor: identity.actor,
       body: rawBodyText,
     });
-    const valid = await verifyEd25519ProofOfPossession(pubKey, statement, sig);
-    if (!valid) return { ok: false, status: 401, error: "invalid_ed25519_pop_signature" };
+    const valid = await verifyEd25519ProofOfPossession(pubKey, popStatement, sig);
+    if (!valid) {
+      return { ok: false, status: 401, error: "invalid_ed25519_pop_signature" };
+    }
     return { ok: true };
   } catch {
     return { ok: false, status: 401, error: "malformed_ed25519_pop" };
@@ -146,12 +159,12 @@ export async function handleV21(
     }
   };
 
-  if (req.method !== "GET" && req.method !== "HEAD") {
+  if (req.method === "POST") {
     await readJsonBody();
-  }
-  const popCheck = await verifyRequestProofOfPossession(req, identity, rawBodyText ?? "");
-  if (!popCheck.ok) {
-    return json({ ok: false, error: popCheck.error }, popCheck.status);
+    const popCheck = await verifyRequestProofOfPossession(req, identity, rawBodyText ?? "");
+    if (!popCheck.ok) {
+      return json({ ok: false, error: popCheck.error }, popCheck.status);
+    }
   }
 
   if (path === "/v1/rag/ingest" && req.method === "POST") {
@@ -164,53 +177,330 @@ export async function handleV21(
     if (!env.AI) return json({ ok: false, error: "AI required" }, 503);
     if (!env.DB) return json({ ok: false, error: "D1 binding required for RAG persistence" }, 503);
     if (!env.VECTORIZE) return json({ ok: false, error: "Vectorize binding required for tenant-isolated RAG" }, 503);
+
     const parts = chunk(text);
-    const vectors = await embed(env, identity, parts);
     const ids: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const id = crypto.randomUUID();
+    for (const part of parts) {
+      const id = `doc_${crypto.randomUUID()}`;
       ids.push(id);
-      await env.DB.prepare(
-        `INSERT INTO rag_documents (id, tenant, source, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-      )
-        .bind(id, namespace, source, i, parts[i], Date.now())
-        .run()
-        .catch(() => {});
-      await env.VECTORIZE.upsert([
-        {
-          id,
-          values: vectors[i],
-          namespace,
-          metadata: { tenant: namespace, source, text: parts[i].slice(0, 500) },
-        },
-      ]);
+      let vec: number[];
+      try {
+        const [embedding] = await embed(env, identity, [part]);
+        if (!Array.isArray(embedding) || embedding.length === 0) throw new Error("empty_embedding");
+        vec = embedding;
+      } catch (error: any) {
+        console.error("[RAG_EMBEDDING_AUTHORIZATION_OR_INFERENCE_FAILED]", error?.message || error);
+        return json({ ok: false, error: "Embedding authorization or inference failed" }, 502);
+      }
+
+      try {
+        await env.DB.prepare(
+          `INSERT INTO documents (id, tenant, source, chunk, created_at, index_status) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+          .bind(id, namespace, source, part, Date.now(), "PENDING_VECTOR")
+          .run();
+      } catch (error) {
+        console.error("[RAG_D1_PERSISTENCE_FAILED]", error);
+        return json({ ok: false, error: "Persistence failed" }, 500);
+      }
+
+      try {
+        await env.VECTORIZE.upsert([
+          {
+            id,
+            values: vec,
+            namespace,
+            metadata: { source, text: part, tenant: namespace },
+          },
+        ] as any);
+      } catch (error: any) {
+        console.error("[RAG_VECTORIZE_UPSERT_FAILED]", error?.message || error);
+        try {
+          await env.DB.prepare(
+            "UPDATE documents SET index_status = ? WHERE id = ? AND tenant = ?"
+          ).bind("FAILED", id, namespace).run();
+        } catch (statusError) {
+          console.error("[RAG_INDEX_STATUS_FAILED]", statusError);
+        }
+        return json({ ok: false, error: "Vector persistence failed", index_status: "FAILED" }, 502);
+      }
+
+      try {
+        await env.DB.prepare(
+          "UPDATE documents SET index_status = ? WHERE id = ? AND tenant = ?"
+        ).bind("INDEXED", id, namespace).run();
+      } catch (statusError) {
+        console.error("[RAG_INDEX_STATUS_FAILED]", statusError);
+        return json({ ok: false, error: "Index status update failed", index_status: "PENDING_VECTOR" }, 500);
+      }
+
+      await emitLineage(env, {
+        tenant: identity.tenant,
+        object_id: id,
+        transformation: "rag_ingest",
+        pipeline_version: "21.0",
+        actor: identity.actor,
+        metadata: { source },
+      });
     }
-    await emitLineage(env, {
-      tenant: namespace,
-      object_id: ids[0] || source,
-      transformation: "rag.ingest",
-      pipeline_version: "v15.5",
-      actor: identity.actor,
-      metadata: { chunks: parts.length, source },
-    }).catch(() => {});
-    return json({ ok: true, chunks: parts.length, ids });
+    return json({ ok: true, chunks: ids.length, ids, vectorize: !!env.VECTORIZE, d1: !!env.DB });
   }
 
   if (path === "/v1/rag/query" && req.method === "POST") {
     const body = await readJsonBody<any>();
-    const query = String(body.query || body.q || "").trim();
-    if (!query) return json({ ok: false, error: "query required" }, 400);
+    const q = String(body.query || body.q || "").trim();
+    if (!q) return json({ ok: false, error: "query required" }, 400);
     const namespace = tenantNamespace(identity);
     if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
-    if (!env.VECTORIZE || !env.AI) return json({ ok: false, error: "VECTORIZE and AI required" }, 503);
-    const [qvec] = await embed(env, identity, [query]);
-    const results = await env.VECTORIZE.query(qvec, {
-      topK: Number(body.topK) || 5,
-      returnMetadata: "all",
-      namespace,
-      filter: { tenant: { $eq: namespace } },
-    } as any);
-    return json({ ok: true, matches: results.matches ?? [], namespace });
+    if (!env.VECTORIZE) {
+      return json({
+        ok: true,
+        matches: [],
+        note: "VECTORIZE not bound — configure index knowledge-base to enable semantic search",
+      });
+    }
+    try {
+      const [qvec] = await embed(env, identity, [q]);
+      const requestedTopK = Number(body.topK ?? 5);
+      const topK = Number.isFinite(requestedTopK)
+        ? Math.min(20, Math.max(1, Math.floor(requestedTopK)))
+        : 5;
+      const m = await env.VECTORIZE.query(qvec, {
+        topK,
+        returnMetadata: "all",
+        namespace,
+        filter: { tenant: { $eq: namespace } },
+      } as any);
+      return json({ ok: true, matches: m.matches ?? [] });
+    } catch (e: any) {
+      return json({ ok: false, error: String(e?.message || e).slice(0, 200) }, 502);
+    }
+  }
+
+  if (path === "/v1/ontology/types" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    if (!env.DB) return json({ ok: false, error: "DB binding required for ontology types", pillar: "ontology" }, 503);
+    try {
+      const id = await createObjectType(env, { name: body.name || "Entity", schema: body.schema || {} });
+      return json({ ok: true, id });
+    } catch (e: any) {
+      return json({ ok: false, error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (path === "/v1/ontology/objects" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    if (!env.DB || !env.GRAPH) return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
+    try {
+      const id = await createObject(env, identity, {
+        type_id: body.type_id,
+        properties: body.properties || {},
+      });
+      return json({ ok: true, id });
+    } catch (e: any) {
+      return json({ ok: false, error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (path === "/v1/ontology/links" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    if (!env.DB || !env.GRAPH) return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
+    try {
+      const id = await createLink(env, identity, {
+        from_id: body.from_id,
+        to_id: body.to_id,
+        type: body.type || "related",
+        properties: body.properties,
+      });
+      return json({ ok: true, id });
+    } catch (e: any) {
+      return json({ ok: false, error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (path === "/v1/ontology/impact" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const rows = await cascadeImpact(env, namespace, body.root_id || body.id, body.at ?? Date.now());
+    return json({ ok: true, impact: rows });
+  }
+
+  if (path === "/v1/graph/neighbors" && req.method === "GET") {
+    if (!env.GRAPH) return json({ ok: false, error: "GRAPH DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const u = new URL(req.url);
+    const stub = env.GRAPH.get(env.GRAPH.idFromName(namespace));
+    const id = u.searchParams.get("id") || "";
+    const res = await stub.fetch(`https://do/neighbors?id=${encodeURIComponent(id)}`);
+    return json({ ok: true, ...(await res.json<any>()) });
+  }
+
+  if (path === "/v1/graph/path" && req.method === "GET") {
+    if (!env.GRAPH) return json({ ok: false, error: "GRAPH DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const u = new URL(req.url);
+    const stub = env.GRAPH.get(env.GRAPH.idFromName(namespace));
+    const from = u.searchParams.get("from") || "";
+    const to = u.searchParams.get("to") || "";
+    const res = await stub.fetch(
+      `https://do/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+    );
+    return json({ ok: true, ...(await res.json<any>()) });
+  }
+
+  if (path === "/v1/lineage" && req.method === "GET") {
+    const u = new URL(req.url);
+    const objectId = u.searchParams.get("object_id") || "";
+    if (!objectId) return json({ ok: false, error: "object_id required" }, 400);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) {
+      return json({ ok: false, error: "tenant_required" }, 403);
+    }
+    const events = await getLineageTree(env, namespace, objectId);
+    return json({ ok: true, events, d1: !!env.DB });
+  }
+
+  if (path === "/v1/swarm/plan" && req.method === "POST") {
+    if (!env.SUPERVISOR) return json({ ok: false, error: "SUPERVISOR DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "supervisor", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
+    const objective = String(body.objective || body.goal || "").trim();
+    if (!objective) return json({ ok: false, error: "objective required" }, 400);
+    const stub = env.SUPERVISOR.get(env.SUPERVISOR.idFromName(namespace));
+    const res = await stub.fetch("https://do/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
+      body: JSON.stringify({ objective, identity }),
+    });
+    const data = await res.json<any>();
+    return json({ ok: res.ok, ...data }, res.status);
+  }
+
+  // Simulation twin: /init | /apply | /evaluate | /commit
+  if (path.startsWith("/v1/simulation") && req.method === "POST") {
+    if (!env.SIMULATION) return json({ ok: false, error: "SIMULATION DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "simulation", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
+    const action = path === "/v1/simulation" ? body.action || "evaluate" : path.replace("/v1/simulation/", "");
+    const doPath =
+      action === "init"
+        ? "/init"
+        : action === "apply"
+          ? "/apply"
+          : action === "commit"
+            ? "/commit"
+            : "/evaluate";
+    const stub = env.SIMULATION.get(env.SIMULATION.idFromName(namespace));
+    const payload =
+      doPath === "/commit"
+        ? { identity }
+        : doPath === "/evaluate"
+          ? { question: body.question || body.scenario || body.message || "Evaluate risks", identity }
+          : { ...body, identity };
+    const res = await stub.fetch(`https://do${doPath}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json<any>().catch(() => ({}));
+    return json({ ok: res.ok, ...data }, res.ok ? 200 : res.status);
+  }
+
+  // Mission brain: POST /run
+  if (path === "/v1/mission" && req.method === "POST") {
+    if (!env.MISSION) return json({ ok: false, error: "MISSION DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "mission", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
+    const mission = {
+      id: body.id || `m_${crypto.randomUUID()}`,
+      origin: body.origin || "https://example.com",
+      pool_id: body.pool_id || "",
+      error_code: Number(body.error_code) || 0,
+      severity: body.severity || "low",
+      created_at: Date.now(),
+      created_by: identity.actor,
+      tenant: namespace,
+    };
+    const stub = env.MISSION.get(env.MISSION.idFromName(mission.id));
+    const res = await stub.fetch("https://do/run", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
+      body: JSON.stringify(mission),
+    });
+    const data = await res.json<any>().catch(() => ({}));
+    return json({ ok: res.ok, ...data }, res.ok ? 200 : res.status);
+  }
+
+  if (path === "/v1/safety/evaluate" && req.method === "POST") {
+    if (!env.SAFETY) return json({ ok: false, error: "SAFETY DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "safety-interlock", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
+    const stub = env.SAFETY.get(env.SAFETY.idFromName(namespace));
+    const res = await stub.fetch("https://do/evaluate", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
+      body: JSON.stringify({ action: body.action || body, identity }),
+    });
+    return json({ ok: true, ...(await res.json<any>()) });
+  }
+
+  if (path === "/v1/pii/mask" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    const text = String(body.text || "");
+    const secret = env.PII_HMAC_SECRET;
+    if (typeof secret !== "string" || new TextEncoder().encode(secret).byteLength < 32) {
+      return json({ ok: false, error: "pii_hmac_secret_not_configured" }, 503);
+    }
+    const { masked } = await maskForAgent(text, identity.clearance, secret);
+    return json({ ok: true, masked });
+  }
+
+  if (path === "/v1/audit" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    if (env.DB) {
+      await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
+        .bind(Date.now(), body.action || "event", identity.actor, JSON.stringify(body.detail || body))
+        .run()
+        .catch(() => {});
+    }
+    if (env.JOURNAL) {
+      await env.JOURNAL.put(
+        `audit/${Date.now()}-${crypto.randomUUID()}.json`,
+        JSON.stringify({ ts: Date.now(), tenant: namespace, actor: identity.actor, body }),
+        { httpMetadata: { contentType: "application/json" } }
+      ).catch(() => {});
+    }
+    return json({ ok: true, persisted: { d1: !!env.DB, journal: !!env.JOURNAL } });
+  }
+
+  if (path === "/v1/etl/enqueue" && req.method === "POST") {
+    const body = await readJsonBody<any>();
+    if (!env.ETL_QUEUE) {
+      return json({ ok: true, queued: false, note: "ETL_QUEUE not bound — dry-run", payload: body });
+    }
+    const namespace = tenantNamespace(identity);
+    if (!namespace || !identity.actor?.trim()) {
+      return json({ ok: false, error: "verified_tenant_identity_required" }, 403);
+    }
+    await env.ETL_QUEUE.send({ ...body, tenant: namespace, actor: identity.actor, ts: Date.now() });
+    return json({ ok: true, queued: true });
   }
 
   if (path === "/v1/decide" && req.method === "POST") {
@@ -228,20 +518,13 @@ export async function handleV21(
         method: "POST",
         headers: { "content-type": "application/json", ...assertion.headers },
         body: JSON.stringify({
-          action: {
-            tool: "decision_inference",
-            args: { message_length: message.length },
-            context: { objective: "ASTON decision request" },
-          },
+          action: { tool: "decision_inference", args: { message_length: message.length }, context: { objective: "ASTON decision request" } },
           identity,
         }),
       });
       const safetyResult = await safetyResponse.json<any>().catch(() => ({}));
       if (!safetyResponse.ok || safetyResult.status !== "allowed") {
-        return json(
-          { ok: false, error: "decision_blocked_by_safety_interlock", policy: safetyResult.policy },
-          safetyResponse.ok ? 403 : 503
-        );
+        return json({ ok: false, error: "decision_blocked_by_safety_interlock", policy: safetyResult.policy }, safetyResponse.ok ? 403 : 503);
       }
     } catch {
       return json({ ok: false, error: "decision_safety_unavailable" }, 503);
@@ -250,19 +533,25 @@ export async function handleV21(
     if (env.VECTORIZE && env.AI) {
       try {
         const [qvec] = await embed(env, identity, [message]);
-        const results = await env.VECTORIZE.query(qvec, {
+        const m = await env.VECTORIZE.query(qvec, {
           topK: 3,
           returnMetadata: "all",
           namespace,
           filter: { tenant: { $eq: namespace } },
         } as any);
-        context = (results.matches ?? []).map((x: any) => x.metadata?.text).filter(Boolean).join("\n---\n");
-      } catch { /* ignore */ }
+        context = (m.matches ?? [])
+          .map((x: any) => x.metadata?.text)
+          .filter(Boolean)
+          .join("\n---\n");
+      } catch {
+        /* ignore */
+      }
     }
     const out = await chat(env, identity, [
       {
         role: "system",
-        content: "ASTON OS decision engine. Sé concreto. Si hay contexto RAG, úsalo; no inventes hechos.",
+        content:
+          "ASTON OS decision engine. Sé concreto. Si hay contexto RAG, úsalo; no inventes hechos.",
       },
       ...(context
         ? [{ role: "user" as const, content: `Contexto:\n${context}\n\nPregunta: ${message}` }]
@@ -270,7 +559,7 @@ export async function handleV21(
     ]);
     if (env.DB) {
       await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
-        .bind(Date.now(), "decide", identity.actor, JSON.stringify({ message: message.slice(0, 200), tenant: namespace }))
+        .bind(Date.now(), "decide", identity.actor, JSON.stringify({ message: message.slice(0, 200) }))
         .run()
         .catch(() => {});
     }
