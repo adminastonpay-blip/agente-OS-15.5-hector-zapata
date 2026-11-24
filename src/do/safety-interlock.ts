@@ -452,7 +452,7 @@ export class SafetyInterlock {
       this.sql.exec("UPDATE pending_approvals SET status = 'expired' WHERE id = ?", approvalId);
       return { error: "approval expired", status: 410 };
     }
-    if (typeof operator !== "string" || !operator.trim() || operator.length > 128) {
+    if (typeof operatorIdentity.actor !== "string" || !operatorIdentity.actor.trim() || operatorIdentity.actor.length > 128) {
       return { error: "invalid_operator", status: 400 };
     }
 
