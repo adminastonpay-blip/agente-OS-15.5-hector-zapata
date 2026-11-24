@@ -63,6 +63,9 @@ jobs:
       - name: RAG tenant isolation red-team tests
         run: npm run test:rag-isolation
 
+      - name: Native Ed25519 attestation tests
+        run: npm run test:attestation
+
       - name: Validate production configuration bundle (dry run only)
         run: npx wrangler deploy --dry-run
 
