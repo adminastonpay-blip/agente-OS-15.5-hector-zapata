@@ -70,7 +70,7 @@ async function createInterlock() {
   const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/=/g, "").replace(/[+]/g, "-").replace(/[/]/g, "_");
   const privateKey = encode(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
   const publicKey = encode(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
-  const trust = { get() { return { async fetch() { return Response.json({ ok: true, effect: "allow", reason: "test_role_grant" }); } }; } };
+  const trust = { idFromName() { return {}; }, get() { return { async fetch() { return Response.json({ ok: true, effect: "allow", reason: "test_role_grant" }); } }; } };
   const env = { TRUST: trust, ATTESTATION_PRIVATE_KEY: privateKey, ATTESTATION_PUBLIC_KEY: publicKey, ATTESTATION_KEY_ID: "test-key-1" };
   return { interlock: new SafetyInterlock(state, env as any), sql };
 }
@@ -98,6 +98,8 @@ test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense m
   assert.equal(gate.status, "pending_approval");
   assert.equal(gate.policy.decision, "require_approval");
   assert.ok(gate.approval_id);
+  assert.equal(gate.attestation.payload.decision, "REQUIRE_APPROVAL");
+  assert.equal(gate.attestation.transparency.anchor_status, "not_submitted");
 
   const pendingResponse = await interlock.fetch(new Request("https://safety.internal/pending"));
   const pending = await pendingResponse.json<any>();
@@ -113,6 +115,7 @@ test("AST-013C-DO-001 / actual SafetyInterlock class gates high-impact defense m
   const decision = await decisionResponse.json<any>();
   assert.equal(decision.status, "approved");
   assert.equal(decision.decided_by, operator);
+  assert.equal(decision.attestation.payload.decision, "ALLOW");
 
   const replayResponse = await interlock.fetch(new Request("https://safety.internal/decide", {
     method: "POST",
