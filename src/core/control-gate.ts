@@ -1,13 +1,17 @@
 import type { Env, Identity } from "../types";
 import type { MissionTokenPayload } from "./mission-token";
 import { RateLimiter } from "./rate-limiter";
+import { signInternalAssertion, MAX_INTERNAL_ASSERTION_TTL_MS } from "./attestation";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type InferenceScope = "chat" | "embeddings" | "tts" | "extraction" | "recovery_diagnosis";
 
 const INFERENCE_PERMIT_TTL_MS = 60_000;
-const issuedPermits = new WeakMap<object, { action: InferenceScope; payload: string; model: string; expiresAt: number }>();
+const issuedPermits = new WeakMap<
+  object,
+  { action: InferenceScope; payload: string; model: string; expiresAt: number }
+>();
 
 declare const permitBrand: unique symbol;
 export interface InferencePermit {
@@ -18,13 +22,82 @@ export type GateResult =
   | { ok: true; permit: InferencePermit }
   | { ok: false; status: 403 | 429 | 503; reason: string; policy?: unknown };
 
+type AssertionCapableEnv = Env & {
+  INTERNAL_ASSERTION_SECRET?: string;
+  INTERNAL_ASSERTION_KEY_ID?: string;
+};
+
+/**
+ * Consumes a one-use InferencePermit for a given scope and payload/model.
+ * Returns false and evicts expired or mismatched permits (fail-closed).
+ */
+export function consumeInferencePermit(
+  permit: InferencePermit | undefined | null,
+  expectedAction: InferenceScope,
+  expectedPayload?: string,
+  expectedModel?: string,
+  nowMs = Date.now()
+): boolean {
+  if (!permit || typeof permit !== "object") return false;
+  const key = permit as unknown as object;
+  const record = issuedPermits.get(key);
+  if (!record) return false;
+  if (record.expiresAt <= nowMs) {
+    issuedPermits.delete(key);
+    return false;
+  }
+  // A mismatched attempt is rejected but does not burn the valid capability.
+  // Only an exact action/payload/model match consumes the one-use permit.
+  if (record.action !== expectedAction) return false;
+  if (typeof expectedPayload === "string" && record.payload !== expectedPayload) return false;
+  if (typeof expectedModel === "string" && record.model !== expectedModel) return false;
+  issuedPermits.delete(key);
+  return true;
+}
+
 /**
  * Accepts only identities produced by the existing authentication boundary.
  * Caller-supplied tenant/user fields are never trusted here.
  */
 export class ControlGate {
-  constructor(private readonly env: Env) {}
+  constructor(private readonly env: AssertionCapableEnv) {}
 
+  private async sha256(value: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  private async createInternalAssertionHeaders(
+    aud: string,
+    subjectTenant: string,
+    subjectActor: string
+  ): Promise<{ ok: true; headers: Record<string, string> } | { ok: false; reason: string }> {
+    const secret = this.env.INTERNAL_ASSERTION_SECRET;
+    const keyId = this.env.INTERNAL_ASSERTION_KEY_ID;
+
+    // Fail-closed: missing configuration must never produce a successful empty assertion.
+    if (!secret || !keyId) {
+      return { ok: false, reason: "internal_assertion_secret_or_kid_missing" };
+    }
+
+    try {
+      const token = await signInternalAssertion(
+        {
+          iss: "control-gate",
+          aud,
+          sub_tenant: subjectTenant,
+          sub_actor: subjectActor,
+          jti: crypto.randomUUID(),
+          ttlMs: MAX_INTERNAL_ASSERTION_TTL_MS,
+        },
+        secret,
+        keyId
+      );
+      return { ok: true, headers: { "x-aston-internal-assertion": token } };
+    } catch {
+      return { ok: false, reason: "internal_assertion_sign_failed" };
+    }
+  }
 
   /**
    * Atomically claims a verified Recovery token before any policy evaluation
@@ -40,11 +113,19 @@ export class ControlGate {
     if (!namespace) {
       return { ok: false, status: 503, reason: "mission_replay_guard_unavailable" };
     }
+    const assertion = await this.createInternalAssertionHeaders(
+      "replay-guard",
+      payload.tenantId,
+      payload.sub || "recovery"
+    );
+    if (!assertion.ok) {
+      return { ok: false, status: 503, reason: assertion.reason };
+    }
     try {
       const stub = namespace.get(namespace.idFromName("recovery-replay:" + payload.tenantId));
       const response = await stub.fetch("https://replay.internal/consume", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertion.headers },
         body: JSON.stringify({ jti: payload.jti, exp: payload.exp }),
       });
       if (response.status === 409) {
@@ -62,19 +143,31 @@ export class ControlGate {
     }
   }
 
-
   async authorizeAction(
     payload: MissionTokenPayload,
     actionContent: string
   ): Promise<GateResult> {
-    if (payload.action !== "recovery_diagnosis" ||
-        !payload.tenantId?.trim() || !payload.sub?.trim() ||
-        typeof actionContent !== "string" || !actionContent.trim() ||
-        actionContent.length > 16_000) {
+    if (
+      payload.action !== "recovery_diagnosis" ||
+      !payload.tenantId?.trim() ||
+      !payload.sub?.trim() ||
+      typeof actionContent !== "string" ||
+      !actionContent.trim() ||
+      actionContent.length > 16_000
+    ) {
       return { ok: false, status: 403, reason: "invalid_recovery_action" };
     }
     if (!this.env.AI || !this.env.SAFETY) {
       return { ok: false, status: 503, reason: "control_gate_binding_unavailable" };
+    }
+
+    const assertion = await this.createInternalAssertionHeaders(
+      "safety-interlock",
+      payload.tenantId,
+      payload.sub
+    );
+    if (!assertion.ok) {
+      return { ok: false, status: 503, reason: assertion.reason };
     }
 
     const identity: Identity = {
@@ -91,7 +184,7 @@ export class ControlGate {
       );
       const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertion.headers },
         body: JSON.stringify({
           action: {
             tool: "recovery_diagnosis",
@@ -101,22 +194,29 @@ export class ControlGate {
           identity,
         }),
       });
-      const decision = await evaluation.json<{ status?: string; policy?: unknown }>()
+      const decision = await evaluation
+        .json<{ status?: string; policy?: unknown }>()
         .catch((): { status?: string; policy?: unknown } => ({}));
       if (!evaluation.ok || decision.status !== "allowed") {
         return {
           ok: false,
           status: evaluation.ok ? 403 : 503,
-          reason: decision.status === "pending_approval"
-            ? "human_approval_required"
-            : decision.status === "denied"
-              ? "safety_policy_denied"
-              : "safety_evaluation_failed",
+          reason:
+            decision.status === "pending_approval"
+              ? "human_approval_required"
+              : decision.status === "denied"
+                ? "safety_policy_denied"
+                : "safety_evaluation_failed",
           policy: decision.policy,
         };
       }
 
-      const rate = await new RateLimiter(this.env).check(payload.tenantId, "recovery_diagnosis", 5, 60_000);
+      const rate = await new RateLimiter(this.env).check(
+        payload.tenantId,
+        "recovery_diagnosis",
+        5,
+        60_000
+      );
       if (!rate.allowed) {
         return {
           ok: false,
@@ -129,7 +229,12 @@ export class ControlGate {
         return { ok: false, status: 503, reason: "approved_recovery_model_not_configured" };
       }
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "recovery_diagnosis", payload: actionContent, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
+      issuedPermits.set(permit, {
+        action: "recovery_diagnosis",
+        payload: actionContent,
+        model,
+        expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS,
+      });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
@@ -168,95 +273,44 @@ export class ControlGate {
     if (!serialized || serialized.length > 32_000) {
       return { ok: false, status: 403, reason: "inference_payload_too_large" };
     }
+    const assertion = await this.createInternalAssertionHeaders(
+      "safety-interlock",
+      identity.tenant,
+      identity.actor
+    );
+    if (!assertion.ok) {
+      return { ok: false, status: 503, reason: assertion.reason };
+    }
     try {
       const safetyStub = safety.get(safety.idFromName("aston-model-safety:" + identity.tenant));
       const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertion.headers },
         body: JSON.stringify({
           action: {
-            tool: action === "embeddings" ? "model_embeddings" : action === "extraction" ? "model_extraction" : "model_tts",
+            tool:
+              action === "embeddings"
+                ? "model_embeddings"
+                : action === "extraction"
+                  ? "model_extraction"
+                  : "model_tts",
             args: {
               model,
               payload: serialized.slice(0, 8_000),
               payload_sha256: await this.sha256(serialized),
             },
-            context: { objective: action === "embeddings" ? "authorize tenant-scoped embeddings" : action === "extraction" ? "authorize structured document extraction" : "authorize text-to-speech" },
-          },
-          identity,
-        }),
-      });
-      const decision = await evaluation.json<{ status?: string; policy?: unknown }>()
-        .catch((): { status?: string; policy?: unknown } => ({}));
-      if (!evaluation.ok || decision.status !== "allowed") {
-        return {
-          ok: false,
-          status: evaluation.ok ? 403 : 503,
-          reason: decision.status === "pending_approval" ? "human_approval_required"
-            : decision.status === "denied" ? "safety_policy_denied" : "safety_evaluation_failed",
-          policy: decision.policy,
-        };
-      }
-      const rate = await new RateLimiter(this.env).check(identity.tenant, action);
-      if (!rate.allowed) {
-        return { ok: false, status: rate.unavailable ? 503 : 429,
-          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded" };
-      }
-      const permit = Object.freeze({});
-      issuedPermits.set(permit, { action, payload: serialized, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
-      return { ok: true, permit: permit as unknown as InferencePermit };
-    } catch {
-      return { ok: false, status: 503, reason: "control_gate_unavailable" };
-    }
-  }
-
-  async authorizeChat(identity: Identity, messages: ChatMessage[], modelOverride?: string): Promise<GateResult> {
-    if (
-      !identity ||
-      identity.method === "public" ||
-      !identity.actor?.trim() ||
-      !identity.tenant?.trim() ||
-      !Array.isArray(identity.roles) ||
-      !identity.clearance
-    ) {
-      return { ok: false, status: 403, reason: "verified_identity_required" };
-    }
-
-    const safetyNamespace = this.env.SAFETY;
-    if (!this.env.AI || !safetyNamespace) {
-      return { ok: false, status: 503, reason: "control_gate_binding_unavailable" };
-    }
-
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return { ok: false, status: 403, reason: "invalid_inference_payload" };
-    }
-
-    const payload = JSON.stringify(messages);
-    if (payload.length > 32_000) {
-      return { ok: false, status: 403, reason: "inference_payload_too_large" };
-    }
-
-    try {
-      const safetyStub = safetyNamespace.get(
-        safetyNamespace.idFromName("aston-chat-safety")
-      );
-      const userMessage = [...messages].reverse().find((item) => item.role === "user");
-      const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: {
-            tool: "chat_completion",
-            args: {
-              message: userMessage?.content ?? "",
-              payload_sha256: await this.sha256(payload),
+            context: {
+              objective:
+                action === "embeddings"
+                  ? "authorize tenant-scoped embeddings"
+                  : action === "extraction"
+                    ? "authorize structured document extraction"
+                    : "authorize text-to-speech",
             },
-            context: { objective: "authorize chat model inference" },
           },
           identity,
         }),
       });
-
       const decision = await evaluation
         .json<{ status?: string; policy?: unknown }>()
         .catch((): { status?: string; policy?: unknown } => ({}));
@@ -264,15 +318,112 @@ export class ControlGate {
         return {
           ok: false,
           status: evaluation.ok ? 403 : 503,
-          reason: decision.status === "pending_approval"
-            ? "human_approval_required"
-            : decision.status === "denied"
-              ? "safety_policy_denied"
-              : "safety_evaluation_failed",
+          reason:
+            decision.status === "pending_approval"
+              ? "human_approval_required"
+              : decision.status === "denied"
+                ? "safety_policy_denied"
+                : "safety_evaluation_failed",
           policy: decision.policy,
         };
       }
+      const rate = await new RateLimiter(this.env).check(identity.tenant, action);
+      if (!rate.allowed) {
+        return {
+          ok: false,
+          status: rate.unavailable ? 503 : 429,
+          reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded",
+        };
+      }
+      const permit = Object.freeze({});
+      issuedPermits.set(permit, {
+        action,
+        payload: serialized,
+        model,
+        expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS,
+      });
+      return { ok: true, permit: permit as unknown as InferencePermit };
+    } catch {
+      return { ok: false, status: 503, reason: "control_gate_unavailable" };
+    }
+  }
 
+  async authorizeChat(
+    identity: Identity,
+    messages: ChatMessage[],
+    requestedModel?: string
+  ): Promise<GateResult> {
+    if (
+      !identity ||
+      identity.method === "public" ||
+      !identity.tenant?.trim() ||
+      !identity.actor?.trim() ||
+      !Array.isArray(messages) ||
+      messages.length === 0
+    ) {
+      return { ok: false, status: 403, reason: "verified_chat_identity_required" };
+    }
+    const serialized = JSON.stringify(messages);
+    if (!serialized || serialized.length > 64_000) {
+      return { ok: false, status: 403, reason: "chat_payload_too_large" };
+    }
+    const model = requestedModel || this.env.CHAT_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    const allowedChatModels = new Set([
+      this.env.CHAT_MODEL,
+      "@cf/meta/llama-3.1-8b-instruct-fast",
+    ]);
+    if (!model.startsWith("@cf/") || !allowedChatModels.has(model)) {
+      return { ok: false, status: 403, reason: "chat_model_not_allowlisted" };
+    }
+    if (!this.env.SAFETY) {
+      return { ok: false, status: 503, reason: "chat_safety_binding_unavailable" };
+    }
+
+    const assertion = await this.createInternalAssertionHeaders(
+      "safety-interlock",
+      identity.tenant,
+      identity.actor
+    );
+    if (!assertion.ok) {
+      return { ok: false, status: 503, reason: assertion.reason };
+    }
+
+    try {
+      const safetyStub = this.env.SAFETY.get(
+        this.env.SAFETY.idFromName("aston-chat-safety:" + identity.tenant)
+      );
+      const evaluation = await safetyStub.fetch("https://safety.internal/evaluate", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...assertion.headers },
+        body: JSON.stringify({
+          action: {
+            tool: "chat_inference",
+            args: {
+              model,
+              message_count: messages.length,
+              payload_sha256: await this.sha256(serialized),
+            },
+            context: { objective: "authorize chat inference" },
+          },
+          identity,
+        }),
+      });
+      const decision = await evaluation
+        .json<{ status?: string; policy?: unknown }>()
+        .catch((): { status?: string; policy?: unknown } => ({}));
+      if (!evaluation.ok || decision.status !== "allowed") {
+        return {
+          ok: false,
+          status: evaluation.ok ? 403 : 503,
+          reason:
+            decision.status === "pending_approval"
+              ? "human_approval_required"
+              : decision.status === "denied"
+                ? "safety_policy_denied"
+                : "safety_evaluation_failed",
+          policy: decision.policy,
+        };
+      }
       const rate = await new RateLimiter(this.env).check(identity.tenant, "chat");
       if (!rate.allowed) {
         return {
@@ -281,38 +432,16 @@ export class ControlGate {
           reason: rate.unavailable ? "rate_limiter_unavailable" : "rate_limit_exceeded",
         };
       }
-
-      const model = modelOverride || this.env.CHAT_MODEL;
-      if (!model || !model.startsWith("@cf/")) {
-        return { ok: false, status: 503, reason: "approved_chat_model_not_configured" };
-      }
-
       const permit = Object.freeze({});
-      issuedPermits.set(permit, { action: "chat", payload, model, expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS });
+      issuedPermits.set(permit, {
+        action: "chat",
+        payload: serialized,
+        model,
+        expiresAt: Date.now() + INFERENCE_PERMIT_TTL_MS,
+      });
       return { ok: true, permit: permit as unknown as InferencePermit };
     } catch {
       return { ok: false, status: 503, reason: "control_gate_unavailable" };
     }
   }
-
-  private async sha256(value: string): Promise<string> {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-}
-
-/** Internal capability consumption: one permit, one exact payload, one inference. */
-export function consumeInferencePermit(
-  permit: InferencePermit,
-  action: InferenceScope,
-  payload: string,
-  model: string
-): boolean {
-  if (!permit || typeof permit !== "object") return false;
-  const issued = issuedPermits.get(permit as object);
-  if (!issued || issued.action !== action || issued.payload !== payload || issued.model !== model) {
-    return false;
-  }
-  issuedPermits.delete(permit as object);
-  return true;
 }

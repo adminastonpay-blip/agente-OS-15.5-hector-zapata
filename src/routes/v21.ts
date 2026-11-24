@@ -7,6 +7,19 @@ import { createObjectType, createObject, createLink, cascadeImpact } from "../on
 import { emitLineage, getLineageTree } from "../lineage";
 import { maskForAgent } from "../pii";
 import { embed, chat, chunk } from "../lib/ai";
+import {
+  canonicalizeJson,
+  fromBase64Url,
+  importEd25519PublicKey,
+  signInternalAssertion,
+  verifyEd25519ProofOfPossession,
+  MAX_INTERNAL_ASSERTION_TTL_MS,
+} from "../core/attestation";
+
+type GateEnv = Env & {
+  INTERNAL_ASSERTION_SECRET?: string;
+  INTERNAL_ASSERTION_KEY_ID?: string;
+};
 
 // Vectorize namespaces are limited to 64 UTF-8 bytes. Derive only from
 // the authenticated identity; never accept a namespace from the request body.
@@ -14,6 +27,93 @@ function tenantNamespace(identity: Identity): string | null {
   const tenant = identity.tenant?.trim();
   if (!tenant || new TextEncoder().encode(tenant).byteLength > 64) return null;
   return tenant;
+}
+
+function hasVerifiedIdentity(identity: Identity | undefined | null): identity is Identity {
+  return Boolean(
+    identity &&
+      identity.method !== "public" &&
+      typeof identity.tenant === "string" &&
+      identity.tenant.trim().length > 0 &&
+      typeof identity.actor === "string" &&
+      identity.actor.trim().length > 0
+  );
+}
+
+/**
+ * Verifies optional Ed25519 Proof-of-Possession headers when presented.
+ * Fails closed (returns false) if headers are partially present or invalid.
+ */
+async function verifyRequestProofOfPossession(
+  req: Request,
+  identity: Identity,
+  rawBodyText: string
+): Promise<{ ok: true } | { ok: false; status: 401 | 403; error: string }> {
+  const sig = req.headers.get("x-aston-pop-signature")?.trim();
+  const pubB64Url = req.headers.get("x-aston-pop-public-key")?.trim();
+  const claimedActor = req.headers.get("x-aston-actor")?.trim();
+  const claimedTenant = req.headers.get("x-aston-tenant")?.trim();
+
+  if (claimedTenant && claimedTenant !== identity.tenant) {
+    return { ok: false, status: 403, error: "tenant_header_mismatch" };
+  }
+  if (claimedActor && claimedActor !== identity.actor) {
+    return { ok: false, status: 403, error: "actor_header_mismatch" };
+  }
+
+  if (!sig && !pubB64Url) {
+    return { ok: true };
+  }
+  if (!sig || !pubB64Url) {
+    return { ok: false, status: 401, error: "incomplete_pop_headers" };
+  }
+
+  try {
+    const pubKey = await importEd25519PublicKey(fromBase64Url(pubB64Url));
+    const url = new URL(req.url);
+    const popStatement = canonicalizeJson({
+      method: req.method,
+      path: url.pathname,
+      tenant: identity.tenant,
+      actor: identity.actor,
+      body: rawBodyText,
+    });
+    const valid = await verifyEd25519ProofOfPossession(pubKey, popStatement, sig);
+    if (!valid) {
+      return { ok: false, status: 401, error: "invalid_ed25519_pop_signature" };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 401, error: "malformed_ed25519_pop" };
+  }
+}
+
+async function buildInternalAssertionHeaders(
+  env: GateEnv,
+  aud: string,
+  identity: Identity
+): Promise<{ ok: true; headers: Record<string, string> } | { ok: false; error: string }> {
+  const secret = env.INTERNAL_ASSERTION_SECRET;
+  const kid = env.INTERNAL_ASSERTION_KEY_ID;
+  if (!secret || !kid) return { ok: false, error: "internal_assertion_secret_or_kid_missing" };
+  if (!identity.tenant || !identity.actor) return { ok: false, error: "verified_identity_required" };
+  try {
+    const token = await signInternalAssertion(
+      {
+        iss: "v21-router",
+        aud,
+        sub_tenant: identity.tenant,
+        sub_actor: identity.actor,
+        jti: crypto.randomUUID(),
+        ttlMs: MAX_INTERNAL_ASSERTION_TTL_MS,
+      },
+      secret,
+      kid
+    );
+    return { ok: true, headers: { "x-aston-internal-assertion": token } };
+  } catch {
+    return { ok: false, error: "internal_assertion_sign_failed" };
+  }
 }
 
 export function pillarStatus(env: Env) {
@@ -38,12 +138,37 @@ export function pillarStatus(env: Env) {
 export async function handleV21(
   path: string,
   req: Request,
-  env: Env,
+  env: GateEnv,
   identity: Identity,
   json: (d: unknown, s?: number) => Response
 ): Promise<Response | null> {
+  if (!hasVerifiedIdentity(identity)) {
+    return json({ ok: false, error: "verified_identity_required" }, 403);
+  }
+
+  let rawBodyText: string | null = null;
+  const readJsonBody = async <T = any>(): Promise<T> => {
+    if (rawBodyText === null) {
+      rawBodyText = await req.text().catch(() => "");
+    }
+    if (!rawBodyText) return {} as T;
+    try {
+      return JSON.parse(rawBodyText) as T;
+    } catch {
+      return {} as T;
+    }
+  };
+
+  if (req.method === "POST") {
+    await readJsonBody();
+    const popCheck = await verifyRequestProofOfPossession(req, identity, rawBodyText ?? "");
+    if (!popCheck.ok) {
+      return json({ ok: false, error: popCheck.error }, popCheck.status);
+    }
+  }
+
   if (path === "/v1/rag/ingest" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     const text = String(body.text || body.content || "").trim();
     const source = String(body.source || "upload").slice(0, 200);
     if (!text) return json({ ok: false, error: "text required" }, 400);
@@ -122,7 +247,7 @@ export async function handleV21(
   }
 
   if (path === "/v1/rag/query" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     const q = String(body.query || body.q || "").trim();
     if (!q) return json({ ok: false, error: "query required" }, 400);
     const namespace = tenantNamespace(identity);
@@ -153,7 +278,7 @@ export async function handleV21(
   }
 
   if (path === "/v1/ontology/types" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     if (!env.DB) return json({ ok: false, error: "DB binding required for ontology types", pillar: "ontology" }, 503);
     try {
       const id = await createObjectType(env, { name: body.name || "Entity", schema: body.schema || {} });
@@ -164,7 +289,7 @@ export async function handleV21(
   }
 
   if (path === "/v1/ontology/objects" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     if (!env.DB || !env.GRAPH) return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
     try {
       const id = await createObject(env, identity, {
@@ -178,7 +303,7 @@ export async function handleV21(
   }
 
   if (path === "/v1/ontology/links" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     if (!env.DB || !env.GRAPH) return json({ ok: false, error: "DB + GRAPH required", pillar: "ontology" }, 503);
     try {
       const id = await createLink(env, identity, {
@@ -194,15 +319,19 @@ export async function handleV21(
   }
 
   if (path === "/v1/ontology/impact" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
-    const rows = await cascadeImpact(env, identity.tenant, body.root_id || body.id, body.at ?? Date.now());
+    const body = await readJsonBody<any>();
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const rows = await cascadeImpact(env, namespace, body.root_id || body.id, body.at ?? Date.now());
     return json({ ok: true, impact: rows });
   }
 
   if (path === "/v1/graph/neighbors" && req.method === "GET") {
     if (!env.GRAPH) return json({ ok: false, error: "GRAPH DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     const u = new URL(req.url);
-    const stub = env.GRAPH.get(env.GRAPH.idFromName(identity.tenant));
+    const stub = env.GRAPH.get(env.GRAPH.idFromName(namespace));
     const id = u.searchParams.get("id") || "";
     const res = await stub.fetch(`https://do/neighbors?id=${encodeURIComponent(id)}`);
     return json({ ok: true, ...(await res.json<any>()) });
@@ -210,8 +339,10 @@ export async function handleV21(
 
   if (path === "/v1/graph/path" && req.method === "GET") {
     if (!env.GRAPH) return json({ ok: false, error: "GRAPH DO not bound" }, 503);
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     const u = new URL(req.url);
-    const stub = env.GRAPH.get(env.GRAPH.idFromName(identity.tenant));
+    const stub = env.GRAPH.get(env.GRAPH.idFromName(namespace));
     const from = u.searchParams.get("from") || "";
     const to = u.searchParams.get("to") || "";
     const res = await stub.fetch(
@@ -224,21 +355,27 @@ export async function handleV21(
     const u = new URL(req.url);
     const objectId = u.searchParams.get("object_id") || "";
     if (!objectId) return json({ ok: false, error: "object_id required" }, 400);
-    if (!identity.tenant || !identity.tenant.trim()) {
+    const namespace = tenantNamespace(identity);
+    if (!namespace) {
       return json({ ok: false, error: "tenant_required" }, 403);
     }
-    const events = await getLineageTree(env, identity.tenant, objectId);
+    const events = await getLineageTree(env, namespace, objectId);
     return json({ ok: true, events, d1: !!env.DB });
   }
 
   if (path === "/v1/swarm/plan" && req.method === "POST") {
     if (!env.SUPERVISOR) return json({ ok: false, error: "SUPERVISOR DO not bound" }, 503);
-    const body = await req.json<any>().catch(() => ({}));
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "supervisor", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
     const objective = String(body.objective || body.goal || "").trim();
     if (!objective) return json({ ok: false, error: "objective required" }, 400);
-    const stub = env.SUPERVISOR.get(env.SUPERVISOR.idFromName(identity.tenant));
+    const stub = env.SUPERVISOR.get(env.SUPERVISOR.idFromName(namespace));
     const res = await stub.fetch("https://do/plan", {
       method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
       body: JSON.stringify({ objective, identity }),
     });
     const data = await res.json<any>();
@@ -248,7 +385,11 @@ export async function handleV21(
   // Simulation twin: /init | /apply | /evaluate | /commit
   if (path.startsWith("/v1/simulation") && req.method === "POST") {
     if (!env.SIMULATION) return json({ ok: false, error: "SIMULATION DO not bound" }, 503);
-    const body = await req.json<any>().catch(() => ({}));
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "simulation", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
     const action = path === "/v1/simulation" ? body.action || "evaluate" : path.replace("/v1/simulation/", "");
     const doPath =
       action === "init"
@@ -258,7 +399,7 @@ export async function handleV21(
           : action === "commit"
             ? "/commit"
             : "/evaluate";
-    const stub = env.SIMULATION.get(env.SIMULATION.idFromName(identity.tenant));
+    const stub = env.SIMULATION.get(env.SIMULATION.idFromName(namespace));
     const payload =
       doPath === "/commit"
         ? { identity }
@@ -267,6 +408,7 @@ export async function handleV21(
           : { ...body, identity };
     const res = await stub.fetch(`https://do${doPath}`, {
       method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
       body: JSON.stringify(payload),
     });
     const data = await res.json<any>().catch(() => ({}));
@@ -276,7 +418,11 @@ export async function handleV21(
   // Mission brain: POST /run
   if (path === "/v1/mission" && req.method === "POST") {
     if (!env.MISSION) return json({ ok: false, error: "MISSION DO not bound" }, 503);
-    const body = await req.json<any>().catch(() => ({}));
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "mission", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
     const mission = {
       id: body.id || `m_${crypto.randomUUID()}`,
       origin: body.origin || "https://example.com",
@@ -285,10 +431,12 @@ export async function handleV21(
       severity: body.severity || "low",
       created_at: Date.now(),
       created_by: identity.actor,
+      tenant: namespace,
     };
     const stub = env.MISSION.get(env.MISSION.idFromName(mission.id));
     const res = await stub.fetch("https://do/run", {
       method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
       body: JSON.stringify(mission),
     });
     const data = await res.json<any>().catch(() => ({}));
@@ -297,17 +445,22 @@ export async function handleV21(
 
   if (path === "/v1/safety/evaluate" && req.method === "POST") {
     if (!env.SAFETY) return json({ ok: false, error: "SAFETY DO not bound" }, 503);
-    const body = await req.json<any>().catch(() => ({}));
-    const stub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
+    const assertion = await buildInternalAssertionHeaders(env, "safety-interlock", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
+    const body = await readJsonBody<any>();
+    const stub = env.SAFETY.get(env.SAFETY.idFromName(namespace));
     const res = await stub.fetch("https://do/evaluate", {
       method: "POST",
+      headers: { "content-type": "application/json", ...assertion.headers },
       body: JSON.stringify({ action: body.action || body, identity }),
     });
     return json({ ok: true, ...(await res.json<any>()) });
   }
 
   if (path === "/v1/pii/mask" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     const text = String(body.text || "");
     const secret = env.PII_HMAC_SECRET;
     if (typeof secret !== "string" || new TextEncoder().encode(secret).byteLength < 32) {
@@ -318,7 +471,9 @@ export async function handleV21(
   }
 
   if (path === "/v1/audit" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
+    const namespace = tenantNamespace(identity);
+    if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     if (env.DB) {
       await env.DB.prepare(`INSERT INTO audit_log (ts, action, actor, detail) VALUES (?, ?, ?, ?)`)
         .bind(Date.now(), body.action || "event", identity.actor, JSON.stringify(body.detail || body))
@@ -328,7 +483,7 @@ export async function handleV21(
     if (env.JOURNAL) {
       await env.JOURNAL.put(
         `audit/${Date.now()}-${crypto.randomUUID()}.json`,
-        JSON.stringify({ ts: Date.now(), actor: identity.actor, body }),
+        JSON.stringify({ ts: Date.now(), tenant: namespace, actor: identity.actor, body }),
         { httpMetadata: { contentType: "application/json" } }
       ).catch(() => {});
     }
@@ -336,29 +491,32 @@ export async function handleV21(
   }
 
   if (path === "/v1/etl/enqueue" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     if (!env.ETL_QUEUE) {
       return json({ ok: true, queued: false, note: "ETL_QUEUE not bound — dry-run", payload: body });
     }
-    if (!identity.tenant?.trim() || !identity.actor?.trim()) {
+    const namespace = tenantNamespace(identity);
+    if (!namespace || !identity.actor?.trim()) {
       return json({ ok: false, error: "verified_tenant_identity_required" }, 403);
     }
-    await env.ETL_QUEUE.send({ ...body, tenant: identity.tenant, actor: identity.actor, ts: Date.now() });
+    await env.ETL_QUEUE.send({ ...body, tenant: namespace, actor: identity.actor, ts: Date.now() });
     return json({ ok: true, queued: true });
   }
 
   if (path === "/v1/decide" && req.method === "POST") {
-    const body = await req.json<any>().catch(() => ({}));
+    const body = await readJsonBody<any>();
     const message = String(body.message || body.objective || "").trim();
     if (!message) return json({ ok: false, error: "message required" }, 400);
     const namespace = tenantNamespace(identity);
     if (!namespace) return json({ ok: false, error: "valid tenant namespace required" }, 403);
     if (!env.SAFETY) return json({ ok: false, error: "decision_safety_binding_unavailable" }, 503);
+    const assertion = await buildInternalAssertionHeaders(env, "safety-interlock", identity);
+    if (!assertion.ok) return json({ ok: false, error: assertion.error }, 503);
     try {
-      const safetyStub = env.SAFETY.get(env.SAFETY.idFromName(identity.tenant));
+      const safetyStub = env.SAFETY.get(env.SAFETY.idFromName(namespace));
       const safetyResponse = await safetyStub.fetch("https://do/evaluate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...assertion.headers },
         body: JSON.stringify({
           action: { tool: "decision_inference", args: { message_length: message.length }, context: { objective: "ASTON decision request" } },
           identity,
@@ -409,4 +567,30 @@ export async function handleV21(
   }
 
   return null;
+}
+
+/** Adapter expected by src/index.ts */
+export async function routeV21(
+  req: Request,
+  env: GateEnv,
+  _ctx: ExecutionContext,
+  identity: Identity,
+  _opts?: {
+    createInternalAssertion?: (
+      aud: string,
+      id: Identity
+    ) => Promise<{ ok: true; headers: Record<string, string> } | { ok: false; error: string }>;
+  }
+): Promise<Response> {
+  const url = new URL(req.url);
+  let path = url.pathname;
+  if (path === "/v21") path = "/v1/capabilities";
+  else if (path.startsWith("/v21/")) path = "/v1/" + path.slice("/v21/".length);
+
+  const json = (d: unknown, s = 200): Response =>
+    Response.json(d, { status: s, headers: { "cache-control": "no-store" } });
+
+  const result = await handleV21(path, req, env, identity, json);
+  if (result) return result;
+  return json({ ok: false, error: "not_found", path }, 404);
 }

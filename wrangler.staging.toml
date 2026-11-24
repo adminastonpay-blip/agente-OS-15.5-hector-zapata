@@ -43,8 +43,16 @@ index_name = "aston-rag-staging-index"
 name = "SAFETY"
 class_name = "SafetyInterlock"
 
+[[durable_objects.bindings]]
+name = "TRUST"
+class_name = "TrustFabric"
+
 # The new Worker name gives this staging deployment isolated DO namespaces.
 [exports.SafetyInterlock]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.TrustFabric]
 type = "durable-object"
 storage = "sqlite"
 

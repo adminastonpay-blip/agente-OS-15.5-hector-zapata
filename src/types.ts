@@ -11,6 +11,8 @@ export interface Env {
   SIMULATION?: DurableObjectNamespace;
   MISSION?: DurableObjectNamespace;
   SAFETY?: DurableObjectNamespace;
+  /** Tenant-isolated RBAC and policy state. */
+  TRUST?: DurableObjectNamespace;
   /** Tenant-partitioned, SQLite-backed single-use mission token claims. */
   REPLAY_GUARD?: DurableObjectNamespace;
   /** Cloudflare Workflow binding used only by the authenticated Recovery entrypoint. */
@@ -49,11 +51,19 @@ export interface Env {
   RECOVERY_ALLOWED_ORIGINS?: string;
   /** Base64url-encoded raw 32-byte Ed25519 public key; configure out-of-band. */
   MISSION_TOKEN_PUBLIC_KEY?: string;
+  /** Base64url-encoded PKCS#8 Ed25519 private key; set with `wrangler secret put`. */
+  ATTESTATION_PRIVATE_KEY?: string;
+  /** Base64url-encoded raw 32-byte Ed25519 public key; non-secret Worker variable. */
+  ATTESTATION_PUBLIC_KEY?: string;
+  /** Stable key identifier included in every signed attestation. */
+  ATTESTATION_KEY_ID?: string;
+  INTERNAL_ASSERTION_SECRET?: string;
+  INTERNAL_ASSERTION_KEY_ID?: string;
 }
 
 export interface Identity {
   actor: string;
-  method: "access" | "apikey" | "sensor" | "public";
+  method: "access" | "apikey" | "sensor" | "public" | "session";
   tenant: string;
   roles: string[];
   clearance: "public" | "internal" | "confidential" | "secret";

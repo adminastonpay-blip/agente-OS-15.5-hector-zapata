@@ -44,7 +44,7 @@ export async function runRouted(
     for (const useGateway of attempts) {
       const messages = input.messages as any[] | undefined;
       const gate = chatRoute
-        ? await new ControlGate(env).authorizeChat(identity, messages || [], model)
+        ? await new ControlGate(env).authorizeChat(identity, messages || [])
         : await new ControlGate(env).authorizeInference(identity, "embeddings", input, model);
       if (!gate.ok) throw new Error(gate.reason);
       try {

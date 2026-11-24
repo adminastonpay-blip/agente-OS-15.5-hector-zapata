@@ -72,6 +72,10 @@ name = "SAFETY"
 class_name = "SafetyInterlock"
 
 [[previews.durable_objects.bindings]]
+name = "TRUST"
+class_name = "TrustFabric"
+
+[[previews.durable_objects.bindings]]
 name = "REPLAY_GUARD"
 class_name = "ReplayGuard"
 
@@ -107,6 +111,10 @@ class_name = "MissionBrain"
 [[durable_objects.bindings]]
 name = "SAFETY"
 class_name = "SafetyInterlock"
+
+[[durable_objects.bindings]]
+name = "TRUST"
+class_name = "TrustFabric"
 
 [[durable_objects.bindings]]
 name = "REPLAY_GUARD"
@@ -156,3 +164,7 @@ DEPLOY_PROFILE = "21.6.3-cf-audit"
 name = "aston-recovery-workflow"
 binding = "RECOVERY_WORKFLOW"
 class_name = "RecoveryWorkflow"
+
+[exports.TrustFabric]
+type = "durable-object"
+storage = "sqlite"

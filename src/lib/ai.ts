@@ -73,7 +73,7 @@ export async function chat(
   for (const model of models) {
     const attempts = env.AI_GATEWAY_ID ? [true, false] : [false];
     for (const useGateway of attempts) {
-      const gate = await new ControlGate(env).authorizeChat(identity, messages, model);
+      const gate = await new ControlGate(env).authorizeChat(identity, messages);
       if (!gate.ok) throw new Error(gate.reason);
       try {
         const out = await new ModelRunner(env).runChat(gate.permit, messages, {

@@ -137,13 +137,18 @@ export async function handleDefense(
     const body = await req.json<any>().catch(() => ({}));
     const approval_id = String(body.approval_id || "");
     if (!approval_id) return json({ ok: false, error: "approval_id required" }, 400);
+    if (identity.method === "public" ||
+        !(identity.roles.includes("approver") || identity.roles.includes("admin"))) {
+      return json({ ok: false, error: "verified_approver_required" }, 403);
+    }
     const approved = body.approved !== false;
-    // The actor must come from the authenticated identity, never caller-controlled JSON.
+    // The actor and role binding come from authenticated server-side identity, never caller JSON.
     const operator = identity.actor;
     const stub = env.SAFETY.get(env.SAFETY.idFromName(tenantKeySafe(identity)));
     const res = await stub.fetch("https://do/decide", {
       method: "POST",
-      body: JSON.stringify({ approval_id, approved, operator }),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approval_id, approved, operator, identity }),
     });
     const data = await res.json<any>();
     return json({ ok: !data.error, ...data }, data.status && data.error ? data.status : 200);
