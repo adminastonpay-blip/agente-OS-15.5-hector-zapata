@@ -27,7 +27,7 @@ export interface AttestationEnvelope {
 }
 
 const encoder = new TextEncoder();
-const ED25519 = { name: "Ed25519" } as AlgorithmIdentifier;
+const ED25519 = { name: "Ed25519" } as const;
 
 function normalize(value: unknown, seen: Set<object>): JsonValue {
   if (
@@ -86,7 +86,7 @@ export async function sha256Hex(input: string | Uint8Array): Promise<string> {
 function toBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
 function fromBase64Url(value: string): Uint8Array {
