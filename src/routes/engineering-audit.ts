@@ -19,11 +19,6 @@ function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return hex(new Uint8Array(digest));
-}
-
 async function digestEvidence(value: object): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -106,10 +101,8 @@ export async function handleEngineeringAuditVerification(
     : !operation.value.intact
       ? "mismatch"
       : operation.value.eventCount === 0 ? "empty" : "intact";
-  const tenantHash = await sha256Hex(identity.tenant);
   const evidence = {
     schema: "aston.engineering.audit.verification.v1",
-    tenant_hash: tenantHash,
     event_count: eventCount,
     integrity_status: status,
     checked_at: checkedAt,
@@ -128,7 +121,6 @@ export async function handleEngineeringAuditVerification(
     status,
     integrity: status === "unknown" ? null : status !== "mismatch",
     events: eventCount,
-    tenant_hash: tenantHash,
     observed_at: checkedAt,
     trace_id: traceContext.traceId,
     request_operation_id: traceContext.spanId,

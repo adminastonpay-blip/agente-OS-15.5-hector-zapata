@@ -108,7 +108,7 @@ test("verifies only the authenticated tenant and emits a correlated child span",
   assert.equal(body.status, "intact");
   assert.equal(body.integrity, true);
   assert.equal(body.events, 3);
-  assert.match(body.tenant_hash, /^[a-f0-9]{64}$/);
+  assert.equal("tenant_hash" in body, false);
   assert.equal(JSON.stringify(body).includes("tenant-a"), false);
   assert.deepEqual(fixture.calls(), {
     namespaceName: "audit:tenant-a",

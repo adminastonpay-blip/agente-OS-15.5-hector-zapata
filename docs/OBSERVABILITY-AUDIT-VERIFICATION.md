@@ -11,7 +11,7 @@ The endpoint is read-only and requires a verified, non-public identity with the 
 - The tenant comes only from the authenticated `Identity` produced by the existing authentication layer.
 - The Worker selects the Durable Object named `audit:<verified-tenant>` and passes that same tenant to the internal verifier.
 - A caller-supplied `tenant` query parameter is rejected. No tenant value is accepted from a request body.
-- The response exposes a SHA-256 tenant fingerprint, not the raw tenant identifier.
+- The response exposes neither the tenant identifier nor a tenant-derived pseudonym.
 - No audit event payloads, actors, credentials, prompts, or row contents are returned.
 
 ## Result contract
