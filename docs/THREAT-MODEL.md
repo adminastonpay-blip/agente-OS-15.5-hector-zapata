@@ -47,7 +47,7 @@ flowchart TD
 - `/audit/verify?tenant=...` verifies chain linkage and record hashes and returns only integrity status and event count.
 - Audit payloads deliberately exclude prompts, source code, credentials, and full request bodies; they record tool, decision, risk, score, policy reasons, approval ID, and actor lineage.
 - Hash chaining is tamper-evidence, not an external immutable/WORM backup: an administrator able to replace the entire Durable Object database could rewrite the chain. Export/anchoring and retention remain follow-up controls.
-- The verification route is a Durable Object internal endpoint; it is not an externally routed Worker API endpoint.
+- The Durable Object `/audit/verify` route remains internal. A private read-only Worker facade, `GET /v1/engineering/audit/verify`, now requires a verified `admin` or `executor`, selects `audit:<verified-tenant>`, rejects caller-supplied tenant overrides, and returns only integrity status, event count, a tenant fingerprint, and an ephemeral evidence digest. It does not expose audit event payloads. An empty chain is reported distinctly and does not prove audit coverage.
 
 ## External audit anchoring — Phase 3 extension
 
