@@ -1,7 +1,7 @@
 import type { RequestSpanEnv, TraceContext } from "./request-span";
 
 /** Closed operation vocabulary keeps telemetry labels bounded and privacy-safe. */
-export type OperationName = "d1.health_probe";
+export type OperationName = "d1.health_probe" | "audit.chain_verify";
 export type OperationOutcome = "success" | "error" | "unavailable";
 
 export interface OperationSpanResult<T> {

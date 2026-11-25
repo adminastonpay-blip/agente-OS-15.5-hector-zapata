@@ -30,6 +30,7 @@ import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleEngineering } from "./routes/engineering";
 import { handleEngineeringHealth } from "./routes/engineering-health";
+import { handleEngineeringAuditVerification } from "./routes/engineering-audit";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
@@ -496,6 +497,9 @@ async function handleRequest(req: Request, env: Env, traceContext: TraceContext)
         version: VERSION,
       }, 503);
     }
+
+    const engineeringAudit = await handleEngineeringAuditVerification(path, req, env, identity, json, traceContext);
+    if (engineeringAudit) return engineeringAudit;
 
     const engineeringHealth = await handleEngineeringHealth(path, req, env, identity, json, traceContext);
     if (engineeringHealth) return engineeringHealth;
