@@ -35,7 +35,7 @@ const EXACT_ROUTES = new Set([
   "/v1/solve", "/v1/tts", "/v1/speech", "/v1/voice", "/v1/voice/profiles",
   "/v1/validate", "/v1/etl/ingest", "/v1/recovery/diagnose",
   "/v1/audit/anchor/verify", "/v1/engineering/overview",
-  "/v1/engineering/health", "/v1/engineering/incidents", "/v1/audit/events",
+  "/v1/engineering/health", "/v1/engineering/audit/verify", "/v1/engineering/incidents", "/v1/audit/events",
 ]);
 
 function randomHex(byteLength: number): string {
@@ -141,7 +141,7 @@ function emitSpan(
 export async function withRequestSpan(
   request: Request,
   env: RequestSpanEnv,
-  next: () => Promise<Response>,
+  next: (context: TraceContext) => Promise<Response>,
 ): Promise<Response> {
   const context = createTraceContext(request);
   const startedAt = new Date().toISOString();
@@ -149,7 +149,7 @@ export async function withRequestSpan(
   let response: Response;
 
   try {
-    response = await next();
+    response = await next(context);
   } catch {
     response = Response.json({
       ok: false,
