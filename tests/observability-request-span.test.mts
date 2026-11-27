@@ -118,3 +118,17 @@ test("converts uncaught handler exceptions to a correlated generic 500", async (
   assert.ok(logs[0].includes('"outcome":"server_error"'));
   assert.ok(!logs[0].includes("customer payload"));
 });
+
+
+test("passes the request trace context to the handler for child-span correlation", async () => {
+  let received: ReturnType<typeof createTraceContext> | undefined;
+  const request = new Request("https://aston.test/health");
+  const response = await withRequestSpan(request, {}, async (context) => {
+    received = context;
+    return new Response("ok");
+  });
+  assert.ok(received);
+  assert.equal(response.headers.get("X-Aston-Trace-Id"), received.traceId);
+  assert.equal(response.headers.get("X-Aston-Operation-Id"), received.spanId);
+  assert.equal(response.headers.get("traceparent"), received.traceparent);
+});

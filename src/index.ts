@@ -29,6 +29,9 @@ import { handleDefense } from "./routes/defense";
 import { handleEconomy } from "./routes/economy";
 import { handleInfra } from "./routes/infra";
 import { handleEngineering } from "./routes/engineering";
+import { handleEngineeringHealth } from "./routes/engineering-health";
+import { handleEngineeringAuditVerification } from "./routes/engineering-audit";
+import { handleEngineeringAuditAnchorVerification } from "./routes/engineering-audit-anchor";
 import { handleProvenance } from "./routes/provenance";
 import { handleRisk } from "./routes/risk";
 import { handleGovernedAgents } from "./agents/governed";
@@ -39,7 +42,7 @@ import { isOutputSafeForCredentialLeak } from "./safety/chat-output-guard";
 import { authorizeApiRequest } from "./security/mvsp-access";
 import { checkRequestRateLimit, enforceRequestBodyLimit } from "./security/request-guard";
 import { sessionStorageKey } from "./security/session-key";
-import { withRequestSpan } from "./observability/request-span";
+import { withRequestSpan, type TraceContext } from "./observability/request-span";
 
 // Required: exported class names must match wrangler [exports.*] and bindings
 export {
@@ -285,7 +288,7 @@ async function handleVoice(req: Request, env: Env, identity: Awaited<ReturnType<
   }
 }
 
-async function handleRequest(req: Request, env: Env): Promise<Response> {
+async function handleRequest(req: Request, env: Env, traceContext: TraceContext): Promise<Response> {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
     const u = new URL(req.url);
@@ -394,14 +397,8 @@ async function handleRequest(req: Request, env: Env): Promise<Response> {
       }
     }
 
-    if (path === "/v1/audit/anchor/verify" && req.method === "POST") {
-      if (!env.SAFETY) return json({ ok: false, error: "audit_safety_binding_unavailable" }, 503);
-      const body = await req.json<{ event_count: number }>().catch(() => null);
-      if (!body || !Number.isSafeInteger(body.event_count) || body.event_count < 1) return json({ ok: false, error: "invalid_anchor_reference" }, 400);
-      const stub = env.SAFETY.get(env.SAFETY.idFromName("audit:" + identity.tenant));
-      const response = await stub.fetch("https://safety.internal/audit/anchor/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: identity.tenant, event_count: body.event_count }) });
-      return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...SECURITY_HEADERS } });
-    }
+    const auditAnchorVerification = await handleEngineeringAuditAnchorVerification(path, req, env, identity, json, traceContext);
+    if (auditAnchorVerification) return auditAnchorVerification;
 
     if (path === "/" || path === "/health") {
       return json({
@@ -496,6 +493,12 @@ async function handleRequest(req: Request, env: Env): Promise<Response> {
       }, 503);
     }
 
+    const engineeringAudit = await handleEngineeringAuditVerification(path, req, env, identity, json, traceContext);
+    if (engineeringAudit) return engineeringAudit;
+
+    const engineeringHealth = await handleEngineeringHealth(path, req, env, identity, json, traceContext);
+    if (engineeringHealth) return engineeringHealth;
+
     const engineering = await handleEngineering(path, req, env, identity, json);
     if (engineering) return engineering;
 
@@ -531,7 +534,7 @@ async function handleRequest(req: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    return withRequestSpan(req, env, () => handleRequest(req, env));
+    return withRequestSpan(req, env, (traceContext) => handleRequest(req, env, traceContext));
   },
   // ETL queue processing is wired here; queue consumers remain explicitly configured
   // per environment so this change does not activate production consumption.

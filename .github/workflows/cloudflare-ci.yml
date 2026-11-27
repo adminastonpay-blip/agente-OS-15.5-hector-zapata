@@ -45,6 +45,9 @@ jobs:
       - name: Security regression tests
         run: npm run test:security
 
+      - name: Assurance and Observability regression tests
+        run: npm run test:observability
+
       - name: AI Control Gate red-team tests
         run: npm run test:control-gate
 
