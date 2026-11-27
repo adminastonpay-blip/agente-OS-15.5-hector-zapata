@@ -19,7 +19,7 @@
     "test:rag-isolation": "node --experimental-loader ./tests/ts-loader.mjs --test tests/rag-isolation.test.mts tests/agent-rag-tenant-isolation.test.mts",
     "check-ai-guardrail": "node scripts/check-ai-guardrail.mjs",
     "test:attestation": "node --experimental-loader ./tests/ts-loader.mjs --test tests/attestation.test.mts",
-    "test:observability": "node --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/observability-request-span.test.mts tests/observability-health-evaluator.test.mts tests/engineering-health.test.mts tests/engineering-audit.test.mts"
+    "test:observability": "node --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/observability-request-span.test.mts tests/observability-health-evaluator.test.mts tests/engineering-health.test.mts tests/engineering-audit.test.mts tests/engineering-audit-anchor.test.mts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261106.1",
